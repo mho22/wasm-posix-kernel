@@ -15,29 +15,29 @@ This document tracks the implementation status of POSIX APIs in the wasm-posix-k
 
 | Function | Status | Notes |
 |----------|--------|-------|
-| `open()` | Planned | Host-delegated. O_CREAT, O_EXCL, O_TRUNC, O_APPEND, O_NONBLOCK, O_CLOEXEC, O_DIRECTORY supported. |
+| `open()` | Partial | Host-delegated. O_CREAT, O_EXCL, O_TRUNC, O_APPEND, O_NONBLOCK, O_CLOEXEC, O_DIRECTORY flags handled. O_NOFOLLOW not yet supported. |
 | `openat()` | Planned | Same as open() with AT_FDCWD and relative fd support. |
-| `close()` | Planned | Ref-counted OFD cleanup. EINTR state is unspecified per POSIX. |
-| `read()` | Planned | Host-delegated for files. Pipe reads from kernel ring buffer. Short reads permitted. |
+| `close()` | Partial | Ref-counted OFD cleanup. Host handle closed when last ref dropped. EINTR not yet handled. |
+| `read()` | Partial | Host-delegated for files. Pipe reads from kernel ring buffer. Short reads permitted. O_NONBLOCK not yet enforced. |
 | `pread()` | Planned | Read at offset without modifying file position. |
-| `write()` | Planned | Host-delegated for files. Pipe writes to kernel ring buffer. O_APPEND atomicity. |
+| `write()` | Partial | Host-delegated for files. Pipe writes to kernel ring buffer. EPIPE on closed read end. O_APPEND seek-to-end not yet atomic. |
 | `pwrite()` | Planned | Write at offset without modifying file position. |
-| `lseek()` | Planned | SEEK_SET, SEEK_CUR supported. SEEK_END requires host file size query. |
-| `dup()` | Planned | Equivalent to fcntl(fd, F_DUPFD, 0). FD_CLOEXEC cleared. |
-| `dup2()` | Planned | Atomic close-and-dup. FD_CLOEXEC cleared. |
-| `pipe()` | Planned | Kernel-space ring buffer. PIPE_BUF=4096 atomicity guarantee. |
-| `fstat()` | Planned | Host-delegated for files. Pipe returns S_IFIFO mode. |
+| `lseek()` | Partial | SEEK_SET, SEEK_CUR implemented. SEEK_END returns ENOSYS (needs host file size query). |
+| `dup()` | Full | Lowest available fd. FD_CLOEXEC cleared. Shares OFD with original. |
+| `dup2()` | Full | Atomic close-and-dup. Same-fd no-op. FD_CLOEXEC cleared. |
+| `pipe()` | Partial | Kernel-space ring buffer (64KB). PIPE_BUF=4096. Blocking read/write not yet implemented (needs cross-worker IPC). |
+| `fstat()` | Partial | Host-delegated for regular files. Pipe returns S_IFIFO | 0o600. Full struct stat populated. |
 
 ## fcntl()
 
 | Command | Status | Notes |
 |---------|--------|-------|
-| `F_DUPFD` | Planned | Lowest fd >= arg. FD_CLOEXEC cleared. |
-| `F_DUPFD_CLOEXEC` | Planned | Atomic dup + set FD_CLOEXEC. |
-| `F_GETFD` | Planned | Returns FD_CLOEXEC flag. |
-| `F_SETFD` | Planned | Sets FD_CLOEXEC flag. Per-fd, not per-OFD. |
-| `F_GETFL` | Planned | Returns status flags + access mode. Use O_ACCMODE mask. |
-| `F_SETFL` | Planned | Only O_APPEND, O_NONBLOCK modifiable. Access mode bits ignored. |
+| `F_DUPFD` | Full | Lowest fd >= arg. FD_CLOEXEC cleared. |
+| `F_DUPFD_CLOEXEC` | Full | Atomic dup + set FD_CLOEXEC. |
+| `F_GETFD` | Full | Returns FD_CLOEXEC flag. |
+| `F_SETFD` | Full | Sets FD_CLOEXEC flag. Per-fd, not per-OFD. |
+| `F_GETFL` | Full | Returns status flags + access mode. Use O_ACCMODE mask. |
+| `F_SETFL` | Full | Only O_APPEND, O_NONBLOCK modifiable. Access mode bits preserved. |
 | `F_GETLK` | Planned | Advisory record locking. Requires kernel lock table. |
 | `F_SETLK` | Planned | Non-blocking lock acquisition. |
 | `F_SETLKW` | Planned | Blocking lock acquisition. Requires cross-worker coordination. |
