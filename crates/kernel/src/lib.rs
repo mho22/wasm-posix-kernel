@@ -4,6 +4,8 @@
 extern crate alloc;
 extern crate wasm_posix_shared;
 
+pub mod fd;
+
 #[cfg(target_arch = "wasm32")]
 mod wasm {
     use core::alloc::{GlobalAlloc, Layout};
