@@ -1,0 +1,179 @@
+# POSIX API Compliance Status
+
+This document tracks the implementation status of POSIX APIs in the wasm-posix-kernel. It is organized by subsystem and updated as features are implemented.
+
+**Legend:**
+- **Full** — Fully implemented per POSIX spec
+- **Partial** — Implemented with documented limitations
+- **Stub** — Returns ENOSYS or placeholder
+- **Planned** — Not yet started, on roadmap
+- **N/A** — Not applicable to Wasm environment
+
+---
+
+## File Descriptors & I/O
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `open()` | Planned | Host-delegated. O_CREAT, O_EXCL, O_TRUNC, O_APPEND, O_NONBLOCK, O_CLOEXEC, O_DIRECTORY supported. |
+| `openat()` | Planned | Same as open() with AT_FDCWD and relative fd support. |
+| `close()` | Planned | Ref-counted OFD cleanup. EINTR state is unspecified per POSIX. |
+| `read()` | Planned | Host-delegated for files. Pipe reads from kernel ring buffer. Short reads permitted. |
+| `pread()` | Planned | Read at offset without modifying file position. |
+| `write()` | Planned | Host-delegated for files. Pipe writes to kernel ring buffer. O_APPEND atomicity. |
+| `pwrite()` | Planned | Write at offset without modifying file position. |
+| `lseek()` | Planned | SEEK_SET, SEEK_CUR supported. SEEK_END requires host file size query. |
+| `dup()` | Planned | Equivalent to fcntl(fd, F_DUPFD, 0). FD_CLOEXEC cleared. |
+| `dup2()` | Planned | Atomic close-and-dup. FD_CLOEXEC cleared. |
+| `pipe()` | Planned | Kernel-space ring buffer. PIPE_BUF=4096 atomicity guarantee. |
+| `fstat()` | Planned | Host-delegated for files. Pipe returns S_IFIFO mode. |
+
+## fcntl()
+
+| Command | Status | Notes |
+|---------|--------|-------|
+| `F_DUPFD` | Planned | Lowest fd >= arg. FD_CLOEXEC cleared. |
+| `F_DUPFD_CLOEXEC` | Planned | Atomic dup + set FD_CLOEXEC. |
+| `F_GETFD` | Planned | Returns FD_CLOEXEC flag. |
+| `F_SETFD` | Planned | Sets FD_CLOEXEC flag. Per-fd, not per-OFD. |
+| `F_GETFL` | Planned | Returns status flags + access mode. Use O_ACCMODE mask. |
+| `F_SETFL` | Planned | Only O_APPEND, O_NONBLOCK modifiable. Access mode bits ignored. |
+| `F_GETLK` | Planned | Advisory record locking. Requires kernel lock table. |
+| `F_SETLK` | Planned | Non-blocking lock acquisition. |
+| `F_SETLKW` | Planned | Blocking lock acquisition. Requires cross-worker coordination. |
+| `F_GETOWN` | Planned | Requires signals subsystem. |
+| `F_SETOWN` | Planned | Requires signals subsystem. |
+
+## Process Management
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `fork()` | Planned | Requires Wasm linear memory snapshot. Complex. |
+| `exec()` | Planned | Load new Wasm module into existing process context. |
+| `waitpid()` | Planned | Kernel-space process table coordination. |
+| `exit()` / `_exit()` | Planned | Cleanup fds, notify parent. |
+| `getpid()` | Planned | Trivial once process table exists. |
+| `getppid()` | Planned | |
+| `getuid()` / `geteuid()` | Planned | Simulated; single-user environment. |
+| `getgid()` / `getegid()` | Planned | Simulated; single-user environment. |
+
+## Signals
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `kill()` | Planned | Inter-process signaling via kernel. |
+| `signal()` | Planned | Legacy signal handler registration. |
+| `sigaction()` | Planned | Modern signal handler registration. |
+| `sigprocmask()` | Planned | Signal mask manipulation. |
+| `sigsuspend()` | Planned | Requires blocking + signal delivery. |
+| `raise()` | Planned | Signal self. |
+| `alarm()` | Planned | Timer-based SIGALRM. |
+
+## Memory Management
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `mmap()` | Planned | Can map to Wasm linear memory regions. Anonymous mappings simpler than file-backed. |
+| `munmap()` | Planned | |
+| `brk()` / `sbrk()` | Planned | Often handled by guest libc (dlmalloc). May not need kernel support. |
+| `mprotect()` | N/A | Wasm linear memory has no page-level protection. |
+
+## Directory Operations
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `opendir()` | Planned | Host-delegated. |
+| `readdir()` | Planned | Host-delegated. |
+| `closedir()` | Planned | |
+| `mkdir()` | Planned | Host-delegated. |
+| `rmdir()` | Planned | Host-delegated. |
+| `chdir()` / `getcwd()` | Planned | Per-process virtual cwd in kernel. |
+| `link()` / `unlink()` | Planned | Host-delegated. |
+| `rename()` | Planned | Host-delegated. |
+| `stat()` / `lstat()` | Planned | Host-delegated. |
+| `chmod()` / `chown()` | Planned | Host-delegated where supported. |
+| `access()` | Planned | Host-delegated. |
+| `realpath()` | Planned | Can be userspace with readlink + getcwd. |
+
+## Socket Operations
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `socket()` | Planned | Requires host network stack. |
+| `bind()` | Planned | |
+| `listen()` | Planned | |
+| `accept()` | Planned | |
+| `connect()` | Planned | |
+| `send()` / `recv()` | Planned | |
+| `sendto()` / `recvfrom()` | Planned | |
+| `setsockopt()` / `getsockopt()` | Planned | |
+| `shutdown()` | Planned | |
+| `select()` / `poll()` | Planned | Kernel-space fd readiness tracking. |
+
+## Time
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `time()` | Planned | Host-delegated. |
+| `gettimeofday()` | Planned | Host-delegated. |
+| `clock_gettime()` | Planned | Host-delegated. |
+| `nanosleep()` | Planned | Atomics.wait with timeout, or setTimeout fallback. |
+| `usleep()` | Planned | |
+
+## Terminal / TTY
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `isatty()` | Planned | Check if fd references a char device. |
+| `tcgetattr()` / `tcsetattr()` | Planned | Virtual terminal state in kernel. |
+| `ioctl()` (TIOC*) | Planned | Terminal ioctls only. |
+
+## Environment
+
+| Function | Status | Notes |
+|----------|--------|-------|
+| `getenv()` | Planned | Userspace with kernel-provided initial environment. |
+| `setenv()` / `unsetenv()` | Planned | Userspace. |
+| `environ` | Planned | |
+
+---
+
+## Environment-Specific Tradeoffs
+
+Some POSIX APIs have different implementation strategies depending on the host environment. This section documents those tradeoffs.
+
+### SharedArrayBuffer Required
+
+These features require SharedArrayBuffer (and cross-origin isolation headers in browsers):
+
+| Feature | With SAB | Without SAB |
+|---------|----------|-------------|
+| Blocking syscalls | `Atomics.wait()` — true blocking | Asyncify yield — cooperative, adds overhead |
+| `fcntl()` locking | Kernel-coordinated via atomic ops | postMessage round-trip, higher latency |
+| `pipe()` blocking read | Blocks worker until data available | Asyncify unwind/rewind |
+| `nanosleep()` | `Atomics.wait()` with timeout | `setTimeout()` via Asyncify |
+| Multi-process shared memory | Direct shared linear memory | Not supported; would need serialization |
+
+### Browser vs Node.js
+
+| Feature | Node.js | Browser |
+|---------|---------|---------|
+| File I/O | Native `fs` module — full POSIX | OPFS (limited), fetch (read-only), or virtual FS |
+| `fork()` | `worker_threads` — feasible | Web Workers — feasible but different API |
+| `Atomics.wait()` on main thread | Works | Throws — must use workers |
+| Network sockets | `net`/`dgram` modules | WebSocket/WebRTC only (no raw sockets) |
+| Process signals | `process.on('SIGINT', ...)` | Not available |
+| stdin | `process.stdin` | Requires custom input mechanism |
+
+---
+
+## Implementation Priority
+
+1. **Phase 1 (Current):** File descriptors & basic I/O — open, close, read, write, lseek, dup, dup2, pipe, fstat, fcntl (flags)
+2. **Phase 2:** Directory operations — opendir, readdir, mkdir, stat, chmod, getcwd/chdir
+3. **Phase 3:** Process management — fork, exec, waitpid, exit, getpid
+4. **Phase 4:** Signals — kill, sigaction, sigprocmask
+5. **Phase 5:** fcntl locking — F_GETLK, F_SETLK, F_SETLKW
+6. **Phase 6:** Sockets — socket, bind, listen, accept, connect
+7. **Phase 7:** Time, TTY, environment
+8. **Phase 8:** Memory management — mmap (anonymous), brk
