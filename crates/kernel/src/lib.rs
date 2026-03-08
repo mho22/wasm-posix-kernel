@@ -7,6 +7,8 @@ extern crate wasm_posix_shared;
 pub mod fd;
 pub mod ofd;
 pub mod pipe;
+pub mod process;
+pub mod syscalls;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm {
