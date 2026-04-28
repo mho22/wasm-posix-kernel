@@ -123,8 +123,7 @@ need_kernel() {
         step "Building kernel"
         cd "$REPO_ROOT"
         cargo build --release -p wasm-posix-kernel \
-            -Z build-std=core,alloc \
-            -Z build-std-features=panic_immediate_abort
+            -Z build-std=core,alloc
         mkdir -p host/wasm
         cp target/wasm64-unknown-unknown/release/wasm_posix_kernel.wasm host/wasm/
         info "Kernel built"
