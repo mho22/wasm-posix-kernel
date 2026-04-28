@@ -71,6 +71,42 @@ These findings are recorded so a fresh session can pick up the current plan as-o
 
 ---
 
+## Second pre-implementation review (2026-04-28, audit redo)
+
+A second devil's-advocate pass focused on the gaps the first pass left open: kernel-side ioctl validation, the libGLESv2 cmdbuf-encoder, the eglut WSI contract checked against the actual upstream sources (`/tmp/mesa-demos-check/src/egl/eglut/wsi/wsi.{h,c}`), and process-level concerns that had been hand-waved (single-threaded GL, OP_VERSION runtime check, B5 phase ordering). Findings, applied in the same commit:
+
+7. **`Task C5b`'s WSI skeleton omits the actual eglut backend contract.** The first pass committed to "follows the same shape as `wsi/x11.c`" without enumerating the contract. Reading `wsi/wsi.h` shows backends export a single `<backend>_wsi_interface()` returning a `struct eglut_wsi_interface` of function pointers; `wsi/wsi.c`'s `_eglutGetWindowSystemInterface()` dispatches via `#if defined(WAYLAND_SUPPORT) ... #elif defined(X11_SUPPORT)` with **no `#else` fallback** — and Mesa upstream has no `WPK_SUPPORT` branch. The original §C5b skeleton only defined five `static` functions that nothing references; it would link-fail at Task C6's link step. Resolution:
+   - §C5b rewritten to export `struct eglut_wsi_interface wpk_wsi_interface(void)` populating the function-pointer struct.
+   - §C5b adds a one-line patch to `wsi/wsi.c` adding `#elif defined(WPK_SUPPORT) return wpk_wsi_interface();`. This is *cross-compilation hygiene* (the same shape Mesa already uses for X11/Wayland) — not a platform-gap workaround. The build defines `-DWPK_SUPPORT` instead of `-DX11_SUPPORT` / `-DWAYLAND_SUPPORT`.
+   - §C5b's "Reference: what eglut expects from a backend" snippet replaced — the `_eglutNative*` wrappers live in `wsi/wsi.c`, not in backends.
+
+8. **`GLIO_QUERY` allocates `vec![0u8; qi.out_buf_len]` with no upper bound** — a wasm process can pass `qi.out_buf_len = 0xFFFFFFFE` and OOM the kernel worker. Resolution:
+   - Task A1 declares `MAX_QUERY_OUT_LEN: u32 = 64 * 1024` (chosen to fit the largest realistic sync-query output: shader info logs, framebuffer status, glReadPixels of a 64×64 thumbnail = 16 KB).
+   - Task A6 `GLIO_QUERY` handler rejects `qi.out_buf_len > MAX_QUERY_OUT_LEN` with `EINVAL` *before* allocating.
+
+9. **`gl_emit` truncates payload length to u16 silently.** The risk-register row "Single op > 64 KB" promised an `assert(len <= UINT16_MAX)` in the libGLESv2 stub, but Task C3's listing didn't include it. Without the guard, a large `glBufferData` payload silently corrupts the cmdbuf and the host mis-decodes everything after. Resolution: Task C3 Step 2 adds an explicit overflow check in `gl_emit` that aborts the process with a stderr diagnostic rather than truncating.
+
+10. **`OP_VERSION` runtime check was promised in A1's doc-comment but no task implemented it.** Without an actual exchange, an OP_VERSION drift (different libGLESv2 stub vs running kernel) is silent. Resolution:
+    - Task A6 `GLIO_INIT` handler now reads a 4-byte `op_version` argument from `buf[0..4]` and rejects mismatches with `ENOSYS`.
+    - Task C2 `eglInitialize` passes `OP_VERSION` (from `glue/gl_abi.h`) as the ioctl argument.
+    - Task A1's GLIO_INIT documentation updated to reflect the new arg.
+
+11. **`Task C3`'s `glBufferSubData` example is broken** — format `"iibb"` is missing `target`, the two `b` markers consume only one (ptr,len) pair (the literal `NULL, 0`). Even with the "real impl: use a custom payload writer" comment, the example would copy verbatim. Resolution: Task C3 Step 3 replaces the broken example with a working `gl_emit(OP_BUFFER_SUB_DATA, "uib", target, off, data, size)` that matches Task B3's decoder layout.
+
+12. **Uniform-location indexing collides after deletes.** Task B3's `runGlQuery` uses `idx = b.uniformLocations.size + 1` — after insert+delete, `size` decreases and the next insert collides. Plus the Map is keyed by string (`\`${idx}\``) but the cmdbuf returns it as int — `Map<string, ...>` and `Map<number, ...>` lookups don't interoperate. Resolution:
+    - Task B1 `GlBinding` adds a `nextUniformLoc: number` monotonic counter and changes `uniformLocations: Map<number, WebGLUniformLocation>` (number-keyed).
+    - Task B3 `runGlQuery` uses `++b.nextUniformLoc` and stores under the integer key.
+
+13. **`GLIO_PRESENT` lacks the `state.current` guard that `GLIO_SUBMIT` has** — a process could call PRESENT before MAKE_CURRENT and the host would receive an unbound dispatch. Resolution: Task A6's `GLIO_PRESENT` arm now mirrors `GLIO_SUBMIT`'s `if !state.current { return Err(EINVAL); }` check.
+
+14. **Single-threaded GL was hand-waved.** Task C3's `static uint8_t *g_cursor` is process-global; two threads in one wasm process calling GL race on it. Documented now as a Trade-off bullet: v1 promises GL is single-threaded per-process; if two threads call GL concurrently, the cmdbuf appends race and the result is undefined. v2 will either lock the cursor (simple, slow) or use per-thread cmdbufs (complex, fast). The libGLESv2 stub does **not** assert single-threaded use in v1 — that would require pulling `pthread_self()` into the GL hot path.
+
+15. **B5's test layer crosses the PR-#2 boundary** — `gltri.wasm` only exists after Phase C, so PR #2's gauntlet ships the cmdbuf decoder with synthetic-only TLV tests. The existing inline note at the bottom of B5 mentioned this but didn't elevate it. Resolution: added as a Trade-off bullet ("PR #2 ships with synthetic-only decoder tests") and to PR #2's description checklist so reviewers know the integration test only lights up after PR #3 lands.
+
+(Findings 7–15 are this commit's contribution; 1–6 are from the first review pass.)
+
+---
+
 ## Phase A — Kernel GL render-node surface (PR #1)
 
 ### Task A1: Shared ABI constants & structs (`shared::gl`)
@@ -100,6 +136,11 @@ pub mod gl {
 
     // --- ioctl request numbers (DRM 'D' magic, starting at 0x40) -----------
 
+    // GLIO_INIT takes a pointer to a `u32` carrying the client's compile-time
+    // `OP_VERSION`. The kernel rejects mismatches with `ENOSYS` so a process
+    // built against an older op-table can't talk to a newer kernel (and vice
+    // versa) without the divergence being caught at first contact rather than
+    // surfacing later as a silent decode error. See A6's GLIO_INIT handler.
     pub const GLIO_INIT:            u32 = 0x40;
     pub const GLIO_TERMINATE:       u32 = 0x41;
     pub const GLIO_CREATE_CONTEXT:  u32 = 0x42;
@@ -115,6 +156,18 @@ pub mod gl {
 
     pub const WPK_SURFACE_DEFAULT: u32 = 1;   // "the bound canvas"
     pub const WPK_SURFACE_PBUFFER: u32 = 2;   // off-screen pbuffer
+
+    /// Upper bound on `GlQueryInfo.out_buf_len`. The kernel allocates a
+    /// scratch buffer of this size before forwarding the query to the
+    /// host; capping prevents a malicious wasm process from passing
+    /// `0xFFFFFFFE` and OOMing the kernel worker.
+    ///
+    /// 64 KiB comfortably fits every realistic sync-query output: shader
+    /// info logs (typically ~1 KB), program info logs, `glGetString`
+    /// results, framebuffer-completeness, and `glReadPixels` of a 64×64
+    /// RGBA thumbnail (16 KB). Demos that need to read back a full
+    /// framebuffer should do it in tiles.
+    pub const MAX_QUERY_OUT_LEN: u32 = 64 * 1024;
 
     // --- cmdbuf opcodes (see host/src/webgl/ops.ts for the TS mirror) ------
     //
@@ -716,15 +769,32 @@ fn open_gl(p: &mut Process, h: &mut impl HostIO) -> i32 {
     sys_open(p, h, b"/dev/dri/renderD128", O_RDWR, 0).unwrap()
 }
 
+/// Helper: invoke GLIO_INIT with the matching OP_VERSION.
+fn glio_init_ok(p: &mut Process, fd: i32) {
+    use wasm_posix_shared::gl::*;
+    let mut buf = OP_VERSION.to_le_bytes();
+    sys_ioctl(p, fd, GLIO_INIT, &mut buf).unwrap();
+}
+
 #[test]
 fn glio_init_marks_initialized() {
     use wasm_posix_shared::gl::*;
     let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
     let fd = open_gl(&mut p, &mut h);
-    sys_ioctl(&mut p, fd, GLIO_INIT, &mut [][..]).unwrap();
+    glio_init_ok(&mut p, fd);
     let ofd = p.ofd_for_fd(fd).unwrap();
     let OpenFileKind::DriRender(s) = &ofd.kind else { panic!() };
     assert!(s.initialized);
+}
+
+#[test]
+fn glio_init_rejects_op_version_mismatch() {
+    use wasm_posix_shared::gl::*;
+    let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
+    let fd = open_gl(&mut p, &mut h);
+    let mut buf = (OP_VERSION + 1).to_le_bytes();
+    let err = sys_ioctl(&mut p, fd, GLIO_INIT, &mut buf).unwrap_err();
+    assert_eq!(err, Errno::ENOSYS);
 }
 
 #[test]
@@ -732,7 +802,7 @@ fn glio_create_context_calls_host_with_attrs() {
     use wasm_posix_shared::gl::*;
     let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
     let fd = open_gl(&mut p, &mut h);
-    sys_ioctl(&mut p, fd, GLIO_INIT, &mut [][..]).unwrap();
+    glio_init_ok(&mut p, fd);
     let mut attrs = GlContextAttrs { client_version: 2, reserved: [0; 3] };
     let mut buf = [0u8; 16];
     unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut _, attrs); }
@@ -749,9 +819,38 @@ fn glio_make_current_requires_ctx_and_surface() {
     use wasm_posix_shared::gl::*;
     let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
     let fd = open_gl(&mut p, &mut h);
-    sys_ioctl(&mut p, fd, GLIO_INIT, &mut [][..]).unwrap();
+    glio_init_ok(&mut p, fd);
     // No context yet → EINVAL.
     let err = sys_ioctl(&mut p, fd, GLIO_MAKE_CURRENT, &mut [][..]).unwrap_err();
+    assert_eq!(err, Errno::EINVAL);
+}
+
+#[test]
+fn glio_query_rejects_oversize_out_buf() {
+    use wasm_posix_shared::gl::*;
+    let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
+    let fd = open_gl(&mut p, &mut h);
+    init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+    let qi = GlQueryInfo {
+        op: QOP_GET_ERROR,
+        in_buf_ptr: 0, in_buf_len: 0,
+        out_buf_ptr: 0, out_buf_len: MAX_QUERY_OUT_LEN + 1,
+        reserved: 0,
+    };
+    let mut buf = [0u8; 24];
+    unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut _, qi); }
+    let err = sys_ioctl(&mut p, fd, GLIO_QUERY, &mut buf).unwrap_err();
+    assert_eq!(err, Errno::EINVAL);
+}
+
+#[test]
+fn glio_present_requires_make_current() {
+    use wasm_posix_shared::gl::*;
+    let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
+    let fd = open_gl(&mut p, &mut h);
+    glio_init_ok(&mut p, fd);
+    // No MAKE_CURRENT → EINVAL.
+    let err = sys_ioctl(&mut p, fd, GLIO_PRESENT, &mut [][..]).unwrap_err();
     assert_eq!(err, Errno::EINVAL);
 }
 
@@ -818,7 +917,20 @@ fn handle_gl_ioctl(
     let OpenFileKind::DriRender(state) = &mut ofd.kind else { return Err(Errno::ENOTTY) };
 
     match request {
-        GLIO_INIT => { state.initialized = true; Ok(()) }
+        GLIO_INIT => {
+            // Client passes its compile-time OP_VERSION. Reject mismatches
+            // up-front so the divergence surfaces here, not as a silent
+            // cmdbuf decode error later.
+            if buf.len() < 4 { return Err(Errno::EINVAL); }
+            let client_op_version: u32 = unsafe {
+                core::ptr::read_unaligned(buf.as_ptr() as *const u32)
+            };
+            if client_op_version != wasm_posix_shared::gl::OP_VERSION {
+                return Err(Errno::ENOSYS);
+            }
+            state.initialized = true;
+            Ok(())
+        }
         GLIO_TERMINATE => {
             // Tear down — see Task A8 for the equivalent on close/exit.
             if let Some(b) = state.cmdbuf.take()  { host.gl_unbind(proc.pid); proc.gl_binding = None; let _ = b; }
@@ -880,11 +992,20 @@ fn handle_gl_ioctl(
             host.gl_submit(proc.pid, si.offset as usize, si.length as usize);
             Ok(())
         }
-        GLIO_PRESENT => { host.gl_present(proc.pid); Ok(()) }
+        GLIO_PRESENT => {
+            if !state.current { return Err(Errno::EINVAL); }
+            host.gl_present(proc.pid);
+            Ok(())
+        }
         GLIO_QUERY => {
             if !state.current { return Err(Errno::EINVAL); }
             if buf.len() < 24 { return Err(Errno::EINVAL); }
             let qi: GlQueryInfo = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const _) };
+            // Cap the kernel-side scratch allocation so a malicious process
+            // can't pass `out_buf_len = 0xFFFFFFFE` and OOM the kernel.
+            if qi.out_buf_len > MAX_QUERY_OUT_LEN {
+                return Err(Errno::EINVAL);
+            }
             // Resolve in / out slices via the existing process-memory helpers.
             let input  = proc.memory.slice(qi.in_buf_ptr  as usize, qi.in_buf_len  as usize)?;
             let mut out_buf = vec![0u8; qi.out_buf_len as usize];
@@ -928,7 +1049,7 @@ fn mmap_dri_renderd128_records_cmdbuf_and_calls_host() {
     use wasm_posix_shared::gl::*;
     let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
     let fd = open_gl(&mut p, &mut h);
-    sys_ioctl(&mut p, fd, GLIO_INIT, &mut [][..]).unwrap();
+    glio_init_ok(&mut p, fd);  // helper from A6 tests — passes OP_VERSION
 
     let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
                         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
@@ -955,7 +1076,7 @@ fn mmap_with_wrong_len_returns_einval() {
     use wasm_posix_shared::gl::*;
     let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
     let fd = open_gl(&mut p, &mut h);
-    sys_ioctl(&mut p, fd, GLIO_INIT, &mut [][..]).unwrap();
+    glio_init_ok(&mut p, fd);  // helper from A6 tests — passes OP_VERSION
     let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN + 4096,
                        PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
     assert_eq!(err, Errno::EINVAL);
@@ -966,7 +1087,7 @@ fn second_mmap_of_dri_renderd128_returns_einval() {
     use wasm_posix_shared::gl::*;
     let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
     let fd = open_gl(&mut p, &mut h);
-    sys_ioctl(&mut p, fd, GLIO_INIT, &mut [][..]).unwrap();
+    glio_init_ok(&mut p, fd);  // helper from A6 tests — passes OP_VERSION
     let _a = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
                       PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
     let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
@@ -1040,7 +1161,7 @@ fn munmap_of_cmdbuf_clears_binding_and_unbinds_host() {
     use wasm_posix_shared::gl::*;
     let (mut p, mut h) = test_helpers::new_proc_with_tracking_host();
     let fd = open_gl(&mut p, &mut h);
-    sys_ioctl(&mut p, fd, GLIO_INIT, &mut [][..]).unwrap();
+    glio_init_ok(&mut p, fd);  // helper from A6 tests — passes OP_VERSION
     let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
                         PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
     sys_munmap(&mut p, &mut h, addr, CMDBUF_LEN).unwrap();
@@ -1058,7 +1179,7 @@ fn process_exit_releases_gl_owner_and_cleans_up_host() {
     {
         let mut p = test_helpers::new_proc_with(h.borrow_mut());
         let fd = open_gl(&mut p, &mut h);
-        sys_ioctl(&mut p, fd, GLIO_INIT, &mut [][..]).unwrap();
+        glio_init_ok(&mut p, fd);  // helper from A6 tests — passes OP_VERSION
         init_ctx_surface_and_make_current(&mut p, &mut h, fd);
         let _addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
                              PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
@@ -1338,7 +1459,12 @@ export interface GlBinding {
   vaos:     Map<number, WebGLVertexArrayObject>;
   fbos:     Map<number, WebGLFramebuffer>;
   rbos:     Map<number, WebGLRenderbuffer>;
-  uniformLocations: Map<string, WebGLUniformLocation>;
+  /** Number-keyed (NOT string-keyed) so the cmdbuf int round-trips
+   *  cleanly. Indices are assigned by `++nextUniformLoc` so insert/
+   *  delete cycles cannot collide. */
+  uniformLocations: Map<number, WebGLUniformLocation>;
+  /** Monotonic counter for `uniformLocations`; never decremented. */
+  nextUniformLoc: number;
 
   currentProgram: WebGLProgram | null;
 }
@@ -1360,6 +1486,7 @@ export class GlContextRegistry {
       buffers: new Map(), textures: new Map(), shaders: new Map(),
       programs: new Map(), vaos: new Map(), fbos: new Map(), rbos: new Map(),
       uniformLocations: new Map(),
+      nextUniformLoc: 0,
       currentProgram: null,
     });
     for (const l of this.listeners) l(b.pid, 'bind');
@@ -1672,8 +1799,10 @@ export function runGlQuery(
       const name    = new TextDecoder().decode(input.subarray(8, 8 + nameLen));
       const loc     = program ? gl.getUniformLocation(program, name) : null;
       if (loc) {
-        const idx = b.uniformLocations.size + 1;     // 1-indexed; 0 = "no location"
-        b.uniformLocations.set(`${idx}`, loc);
+        // Monotonic — never reuse an index, even after deletes. Map.size
+        // is the wrong source: it decreases on delete and would collide.
+        const idx = ++b.nextUniformLoc;
+        b.uniformLocations.set(idx, loc);
         new DataView(out.buffer, out.byteOffset, 4).setInt32(0, idx, true);
       } else {
         new DataView(out.buffer, out.byteOffset, 4).setInt32(0, -1, true);
@@ -2229,7 +2358,15 @@ EGLDisplay eglGetDisplay(EGLNativeDisplayType native) {
 EGLBoolean eglInitialize(EGLDisplay dpy, EGLint *maj, EGLint *min) {
   (void)dpy;
   if (S.fd < 0) { S.last_error = EGL_NOT_INITIALIZED; return EGL_FALSE; }
-  if (ioctl(S.fd, GLIO_INIT, NULL) < 0) { S.last_error = EGL_NOT_INITIALIZED; return EGL_FALSE; }
+  // Pass our compile-time OP_VERSION so the kernel can reject mismatches
+  // up-front (see A6's GLIO_INIT handler). A drift here surfaces as
+  // EGL_NOT_INITIALIZED rather than as a silent cmdbuf decode error
+  // later.
+  uint32_t client_op_version = OP_VERSION;
+  if (ioctl(S.fd, GLIO_INIT, &client_op_version) < 0) {
+    S.last_error = EGL_NOT_INITIALIZED;
+    return EGL_FALSE;
+  }
   S.initialized = true;
   if (maj) *maj = 1; if (min) *min = 5;
   return EGL_TRUE;
@@ -2474,6 +2611,18 @@ static void gl_emit(uint16_t op, const char *fmt, ...) {
   va_list ap; va_start(ap, fmt);
   size_t plen = fmt_payload_len(fmt, ap);
   va_end(ap);
+  // The TLV envelope is `{u16 op, u16 payload_len, payload}`; payload_len
+  // is u16 so a single op cannot exceed 65 535 bytes. v1 demos (es2gears)
+  // top out at ~23 KB; bigger payloads (e.g. glTexImage2D for a >64 KB
+  // texture, or a giant glBufferData) would silently truncate via the
+  // u16 cast and corrupt the cmdbuf for everything after. v2 widens the
+  // envelope to u32 (ABI break — own design pass). For v1, fail loudly:
+  if (plen > 0xFFFF) {
+    fprintf(stderr,
+            "gl_emit: payload %zu > 65535 (single-op TLV cap, v1 limit)\n",
+            plen);
+    abort();
+  }
   if (g_cursor + 4 + plen > g_base + CMDBUF_LEN) gles_flush();
   va_start(ap, fmt);
   uint8_t *c = g_cursor;
@@ -2538,8 +2687,10 @@ void glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage
   gl_emit(OP_BUFFER_DATA, "ubu", (uint32_t)target, data, (size_t)size, (uint32_t)usage);
 }
 void glBufferSubData(GLenum target, GLintptr off, GLsizeiptr size, const void *data) {
-  gl_emit(OP_BUFFER_SUB_DATA, "iibb", (int32_t)off, (int32_t)size, /*placeholder*/ NULL, (size_t)0);
-  // (real impl: use a custom payload writer; the blob is the data, length=size.)
+  // Payload: u32 target, i32 offset, blob{u32 size, bytes...}.
+  // Matches Task B3's decoder layout for OP_BUFFER_SUB_DATA.
+  gl_emit(OP_BUFFER_SUB_DATA, "uib",
+          (uint32_t)target, (int32_t)off, data, (size_t)size);
 }
 
 // Textures, shaders/programs, uniforms, vertex attribs, draws, VAOs, FBOs:
@@ -2695,29 +2846,57 @@ git commit -m "examples(gldemo): build gltri/glopen-only/gloverflow + enable B5 
 `es2gears.c` does not call EGL directly — it uses Mesa's `eglut` harness, which in turn delegates to a WSI backend (`wsi/x11.c` or `wsi/wayland.c` upstream). The clean way to ship es2gears unmodified is to author a third backend, `wsi/wpk.c`, alongside the existing two. This is the same extension pattern Mesa uses; it does **not** count as a platform-gap patch and `eglut.c` itself stays byte-for-byte upstream.
 
 **Files:**
-- Create: `examples/libs/es2gears/wpk-backend/wsi/wpk.c` (~80 LoC, structurally mirrors the existing `wsi/x11.c` — see `/tmp/mesa-demos-check/src/egl/eglut/wsi/x11.c` for the reference shape).
-- The cross-compile in Task C6 builds this file together with the upstream `eglut.c` + `wsi/wsi.c`.
+- Create: `examples/libs/es2gears/wpk-backend/wsi/wpk.c` (~90 LoC, structurally mirrors the existing `wsi/x11.c` — see `/tmp/mesa-demos-check/src/egl/eglut/wsi/x11.c` for the reference shape).
+- Create: `examples/libs/es2gears/patches/0001-eglut-wsi-add-wpk-support.patch` — one-line addition to `wsi/wsi.c`'s `_eglutGetWindowSystemInterface()` adding a `WPK_SUPPORT` branch alongside `WAYLAND_SUPPORT` / `X11_SUPPORT`. **Cross-compilation hygiene** — same shape Mesa already uses for its own backends; not a platform-gap workaround.
+- The cross-compile in Task C6 builds these together with the upstream `eglut.c` + `wsi/wsi.c` (with patch applied) under `-DWPK_SUPPORT`.
 
-**Reference: what eglut expects from a backend (from `eglut.c`)**
+**Reference: the actual eglut backend contract (from `wsi/wsi.h` + `wsi/wsi.c`)**
+
+The first review pass got this wrong. Backends do **not** export `_eglutNative*` directly — those wrappers live in `wsi/wsi.c` and trampoline through `_eglut->wsi.<fn>()`. Each backend instead exports a single function returning a struct of function pointers:
 
 ```c
-// eglut.c calls these symbols from the backend:
-void _eglutNativeInitDisplay(void);   // sets _eglut->native_dpy + ->surface_type
-void _eglutNativeFiniDisplay(void);
-void _eglutNativeInitWindow(struct eglut_window *win, const char *title,
-                            int x, int y, int w, int h);
-void _eglutNativeFiniWindow(struct eglut_window *win);
-void _eglutNativeEventLoop(void);
+// from wsi/wsi.h:
+struct eglut_wsi_interface {
+   void (*init_display)(void);
+   void (*fini_display)(void);
+   void (*init_window)(struct eglut_window *win, const char *title,
+                       int x, int y, int w, int h);
+   void (*event_loop)(void);
+   void (*fini_window)(struct eglut_window *win);
+};
+
+#ifdef WPK_SUPPORT
+struct eglut_wsi_interface wpk_wsi_interface(void);
+#endif
+
+// from wsi/wsi.c (after our patch):
+struct eglut_wsi_interface
+_eglutGetWindowSystemInterface(void)
+{
+#if defined(WAYLAND_SUPPORT) && defined(X11_SUPPORT)
+   ...
+#elif defined(WAYLAND_SUPPORT)
+   return wayland_wsi_interface();
+#elif defined(X11_SUPPORT)
+   return x11_wsi_interface();
+#elif defined(WPK_SUPPORT)              // ← one-line addition
+   return wpk_wsi_interface();
+#endif
+}
 ```
 
-**Step 1: Implement the WPK backend**
+`eglut.c` itself remains byte-for-byte upstream — it calls `_eglut->wsi = _eglutGetWindowSystemInterface()` once, then dispatches every native call through `_eglut->wsi.<fn>()`.
+
+**Step 1: Implement the WPK backend (`wsi/wpk.c`)**
 
 ```c
 // examples/libs/es2gears/wpk-backend/wsi/wpk.c
 //
-// eglut WSI backend for wasm-posix-kernel. Mirrors wsi/x11.c shape;
-// no native window system — every window maps to "the default canvas"
-// via the EGL_WPK_SURFACE_DEFAULT sentinel that our libEGL recognizes.
+// eglut WSI backend for wasm-posix-kernel. Same shape as wsi/x11.c:
+// static fn impls + a single `wpk_wsi_interface()` exporter that
+// populates the function-pointer struct. No native window system —
+// every window maps to "the default canvas" via the
+// EGL_WPK_SURFACE_DEFAULT sentinel that our libEGL recognizes.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -2740,7 +2919,7 @@ static struct termios saved_termios;
 static int termios_saved = 0;
 
 static void
-init_display(void)
+wpk_init_display(void)
 {
    // No native display — eglGetDisplay(EGL_DEFAULT_DISPLAY) is what opens
    // /dev/dri/renderD128 inside libEGL.
@@ -2749,14 +2928,14 @@ init_display(void)
 }
 
 static void
-fini_display(void)
+wpk_fini_display(void)
 {
    _eglut->native_dpy = NULL;
 }
 
 static void
-init_window(struct eglut_window *win, const char *title,
-            int x, int y, int w, int h)
+wpk_init_window(struct eglut_window *win, const char *title,
+                int x, int y, int w, int h)
 {
    (void)title; (void)x; (void)y;
 
@@ -2768,7 +2947,7 @@ init_window(struct eglut_window *win, const char *title,
 }
 
 static void
-fini_window(struct eglut_window *win)
+wpk_fini_window(struct eglut_window *win)
 {
    (void)win;
 }
@@ -2795,7 +2974,7 @@ raw_termios_restore(void)
 }
 
 static void
-event_loop(void)
+wpk_event_loop(void)
 {
    // Trivial loop: pump idle + display callbacks. The kernel host's
    // RAF loop is what actually paces us — eglSwapBuffers blocks on
@@ -2815,29 +2994,64 @@ event_loop(void)
          _eglut->current->display_cb();
    }
 }
+
+// The single exported symbol — populated from the function-pointer
+// struct declared in wsi/wsi.h. wsi.c's _eglutGetWindowSystemInterface()
+// returns the result of this when -DWPK_SUPPORT is defined.
+struct eglut_wsi_interface
+wpk_wsi_interface(void)
+{
+   struct eglut_wsi_interface iface = {
+      .init_display = wpk_init_display,
+      .fini_display = wpk_fini_display,
+      .init_window  = wpk_init_window,
+      .event_loop   = wpk_event_loop,
+      .fini_window  = wpk_fini_window,
+   };
+   return iface;
+}
 ```
 
 (The exact eglut internals — `_eglut->current`, `_eglut->idle_cb`, `_eglut->redisplay`, the `keyboard_cb` / `display_cb` pointers, the `EGLUT_KEY_*` codes for arrow keys — should be lifted from `eglutint.h` at port time. Cross-check against the cloned mesa-demos repo before committing.)
 
-**Step 2: Validate the backend compiles standalone**
+**Step 2: Patch `wsi/wsi.c` to add a `WPK_SUPPORT` branch**
 
-A standalone compile against the headers (no link yet) catches missing includes early:
+```diff
+--- a/src/egl/eglut/wsi/wsi.c
++++ b/src/egl/eglut/wsi/wsi.c
+@@ -19,6 +19,8 @@ _eglutGetWindowSystemInterface(void)
+    return wayland_wsi_interface();
+ #elif defined(X11_SUPPORT)
+    return x11_wsi_interface();
++#elif defined(WPK_SUPPORT)
++   return wpk_wsi_interface();
+ #endif
+ }
+```
+
+The corresponding declaration in `wsi/wsi.h` (already present for X11/Wayland under `#ifdef`) gets a parallel `#ifdef WPK_SUPPORT` block. This is the same `#elif` pattern Mesa upstream already uses for its own backends and is the idiomatic way to add a new platform — patching `wsi.c` is *cross-compilation hygiene*, not a platform-gap workaround.
+
+**Step 3: Validate the backend compiles + exports the symbol**
+
+A standalone compile against the headers, plus a quick `wasm-objdump` to confirm `wpk_wsi_interface` is in fact exported (a static-only build would silently link-fail at C6 with no diagnostic until the eglut harness tried to dispatch through `_eglut->wsi.<fn>()`):
 
 ```bash
-wasm32posix-cc -c \
+wasm32posix-cc -c -DWPK_SUPPORT \
   -I"$REPO_ROOT/examples/libs/es2gears/mesa-demos-src/src/egl/eglut" \
   -I"$REPO_ROOT/musl-overlay/include" \
   examples/libs/es2gears/wpk-backend/wsi/wpk.c \
   -o /tmp/wpk-backend.o
+wasm-objdump -x /tmp/wpk-backend.o | grep -F 'wpk_wsi_interface'
 ```
 
-Expected: clean compile.
+Expected: clean compile, and `wpk_wsi_interface` shows up as a non-static export.
 
-**Step 3: Commit**
+**Step 4: Commit**
 
 ```bash
-git add examples/libs/es2gears/wpk-backend/
-git commit -m "examples(gldemo): eglut WSI backend for wpk (wsi/wpk.c)"
+git add examples/libs/es2gears/wpk-backend/ \
+        examples/libs/es2gears/patches/0001-eglut-wsi-add-wpk-support.patch
+git commit -m "examples(gldemo): eglut WSI backend for wpk (wsi/wpk.c + wsi.c patch)"
 ```
 
 ---
@@ -2875,14 +3089,18 @@ done
 
 # es2gears depends on eglut + a WSI backend + matrix.c. We link the
 # upstream eglut + wsi/wsi.c + util/matrix.c byte-for-byte, plus our
-# own wsi/wpk.c (Task C5b) as the platform backend. No upstream files
-# are modified.
+# own wsi/wpk.c (Task C5b) as the platform backend. wsi/wsi.c gets
+# the one-line `WPK_SUPPORT` patch applied above (cross-compile
+# hygiene — same shape Mesa uses for X11/Wayland). `eglut.c` and
+# `es2gears.c` themselves remain byte-for-byte upstream.
+#
+# `-DWPK_SUPPORT` selects our backend in `_eglutGetWindowSystemInterface()`.
 EGLUT_DIR="$SRC/src/egl/eglut"
 UTIL_DIR="$SRC/src/util"
 WPK_BACKEND="$HERE/wpk-backend/wsi/wpk.c"
 
 wasm32posix-cc \
-  -Os -DEGL_DEFAULT_DISPLAY=0 \
+  -Os -DEGL_DEFAULT_DISPLAY=0 -DWPK_SUPPORT \
   -I"$REPO_ROOT/musl-overlay/include" \
   -I"$EGLUT_DIR" \
   -I"$UTIL_DIR" \
@@ -3152,8 +3370,10 @@ These were chosen in the design RFC (`docs/plans/2026-04-28-webgl-gles2-design.m
 - **Hand-written stub, no generator** in v1 (~80-LoC `gl_emit()` is the smallest viable shape; generator deferred to v2 per design §9).
 - **OffscreenCanvas in the kernel worker** as the default; main-thread fallback is supported but second-class.
 - **Khronos headers vendored unmodified** (no fork; they're stable API headers).
-- **`es2gears` ships unmodified** — the EGL surface boilerplate lives in Mesa's `eglut` harness (`eglut.c` + `wsi/<backend>.c`). We add a new backend `wsi/wpk.c` (Task C5b) following the same pattern as the upstream X11 / Wayland backends. `eglut.c` itself is also byte-for-byte upstream. No patches to demo or harness.
+- **`es2gears` ships unmodified** — the EGL surface boilerplate lives in Mesa's `eglut` harness (`eglut.c` + `wsi/<backend>.c`). We add a new backend `wsi/wpk.c` (Task C5b) following the same pattern as the upstream X11 / Wayland backends. `wsi/wsi.c` gets a one-line `#elif defined(WPK_SUPPORT)` patch to add the dispatch arm — same shape Mesa upstream uses for X11 / Wayland, classified as cross-compilation hygiene. `eglut.c` and `es2gears.c` themselves are byte-for-byte upstream. No platform-gap patches.
 - **`gltri.c` is the structural test guard, not a Playwright pixel snapshot** (rotation makes snapshots brittle).
+- **GL is single-threaded per process in v1.** The libGLESv2 stub keeps a process-global `g_cursor` into the shared cmdbuf; two threads in one process calling GL concurrently race on the cursor and produce undefined output. The stub does **not** assert single-threaded use (that would require `pthread_self()` on the GL hot path). v2 will pick: (a) lock the cursor (simple, slow), or (b) per-thread cmdbufs (complex, fast). v1 demos (`gltri`, `es2gears`) are single-threaded and don't hit this.
+- **PR #2 ships with synthetic-only decoder tests.** Task B5's `gltri.wasm` integration test depends on libEGL/libGLESv2 from Phase C and only lights up after PR #3's sysroot stubs land. PR #2's gauntlet exercises the TLV decoder against hand-rolled SharedArrayBuffer fixtures only, not real C-side encoder output. The B5 inline note already flags this; calling it out here so PR #2 reviewers know the integration tier comes online with PR #3.
 
 ## Risk register
 
@@ -3168,6 +3388,9 @@ Issues that could derail the stack mid-implementation, with the planned response
 | Sync query latency dominates on `glGetError`-spammy demos | Manual gldemo with FPS readout | Document; advise patching the demo to not call `glGetError` per call (per the design doc trade-off note). Don't add a JS-side fast-path cache in v1. |
 | `wasm32posix-cc` auto-link breaks an existing program that explicitly links `-lEGL` | Existing test gauntlet | The auto-link logic must be additive only (skip when already in the linker invocation). Verify on existing programs in `programs/`. |
 | ABI snapshot diff is larger than expected (e.g. tracks tagged-union variants) | Task A9 diff inspection | Either accept and bump `ABI_VERSION` regardless, or refine `scripts/check-abi-version.sh` filters — discuss with user before changing the script. |
+| `OP_VERSION` drift between client (libGLESv2) and kernel | Task A6 `GLIO_INIT` op_version check; surfaces at `eglInitialize` time as `EGL_NOT_INITIALIZED` | Bump in lockstep across `shared::gl::OP_VERSION`, `host/src/webgl/ops.ts`, and `glue/gl_abi.h` in the same commit. Mismatched stub vs kernel produces a clean `ENOSYS` from the kernel rather than a silent decode error. |
+| Sync query OOM via `out_buf_len = 0xFFFFFFFE` | Task A6 `GLIO_QUERY` rejects `out_buf_len > MAX_QUERY_OUT_LEN` (64 KiB) with `EINVAL` | Fixed kernel-side cap; demos needing >64 KiB output (full-framebuffer reads) tile their reads. The cap is itself part of the ABI — bumping it is an `ABI_VERSION` change. |
+| Two threads in one process calling GL concurrently | No detection in v1 (per Trade-off above); silent cmdbuf corruption | Document v1 = single-threaded GL in porting guide. v2 plans either cursor-lock or per-thread cmdbufs. |
 
 ## What this plan doesn't cover (all v2 — see design doc §9)
 
