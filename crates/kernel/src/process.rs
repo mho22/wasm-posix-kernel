@@ -376,6 +376,12 @@ pub struct Process {
     /// `Some` between successful `mmap` and the matching
     /// `munmap`/process-exit/exec.
     pub gl_binding: Option<GlBinding>,
+    /// GL session state for the open `/dev/dri/renderD128` handle.
+    /// `GL_DEVICE_OWNER` enforces single-process ownership, so the
+    /// kernel keeps a single state record per process — re-opens by
+    /// the same process share it. `Some` between `GLIO_INIT` and
+    /// `GLIO_TERMINATE`/last close/exec.
+    pub gl_state: Option<crate::ofd::GlState>,
 }
 
 impl Process {
@@ -456,6 +462,7 @@ impl Process {
             has_exec: false,
             fb_binding: None,
             gl_binding: None,
+            gl_state: None,
         }
     }
 

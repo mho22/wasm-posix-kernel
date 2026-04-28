@@ -937,6 +937,8 @@ pub fn deserialize_fork_state(buf: &[u8], child_pid: u32) -> Result<Process, Err
         fb_binding: None,
         // Same single-owner rule for /dev/dri/renderD128 (GL_DEVICE_OWNER).
         gl_binding: None,
+        // GL session state is not inherited across fork — same rule.
+        gl_state: None,
     })
 }
 
@@ -1317,6 +1319,8 @@ pub fn deserialize_exec_state(buf: &[u8], pid: u32) -> Result<Process, Errno> {
         fb_binding: None,
         // Same: exec wipes any prior GL cmdbuf binding.
         gl_binding: None,
+        // The new program must run GLIO_INIT itself.
+        gl_state: None,
     })
 }
 

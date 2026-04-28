@@ -57,8 +57,9 @@ const SETFL_MODIFIABLE: u32 = O_APPEND | O_NONBLOCK;
 
 /// Live cmdbuf mapping for a process's GL fd.
 ///
-/// Forward-declared in A5; populated by the GLIO_INIT/mmap path in A6/A7.
-#[allow(dead_code)]
+/// Populated by the GLIO_INIT path (A6) and the mmap path (A7). The
+/// `submit_seq` counter is bumped by every successful `GLIO_SUBMIT` and
+/// is used for host-side debug-ring correlation.
 #[derive(Clone, Copy, Debug)]
 pub struct CmdbufBinding {
     /// Offset within the process's wasm `Memory`.
@@ -70,23 +71,23 @@ pub struct CmdbufBinding {
     pub submit_seq: u64,
 }
 
-/// Per-fd state for an open `/dev/dri/renderD128` handle.
+/// Per-process GL state for the open `/dev/dri/renderD128` handle.
 ///
-/// Forward-declared in A5; wired into per-OFD storage in A6 once the
-/// GLIO ioctls land. v1 has at most one such fd per process (single-owner
-/// device, see `GL_DEVICE_OWNER`).
-#[allow(dead_code)]
+/// v1's `GL_DEVICE_OWNER` enforces single-process ownership of the device,
+/// so this state lives directly on `Process` rather than on each OFD —
+/// re-opens by the same process share one logical state, matching how
+/// `Process::fb_binding` mirrors a single fbdev mmap.
 #[derive(Clone, Debug, Default)]
 pub struct GlState {
     /// Set after `GLIO_INIT` succeeded.
     pub initialized: bool,
-    /// Allocated by `GLIO_CREATE_CONTEXT`. One per fd in v1.
+    /// Allocated by `GLIO_CREATE_CONTEXT`. One per process in v1.
     pub context_id: Option<u32>,
     /// Allocated by `GLIO_CREATE_SURFACE`.
     pub surface_id: Option<u32>,
     /// Set after `GLIO_MAKE_CURRENT`.
     pub current: bool,
-    /// Set when the cmdbuf has been mmap'd.
+    /// Set when the cmdbuf has been mmap'd (A7).
     pub cmdbuf: Option<CmdbufBinding>,
 }
 
