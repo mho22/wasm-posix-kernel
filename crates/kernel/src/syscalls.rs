@@ -4281,6 +4281,42 @@ pub fn sys_mmap(
             );
             return Ok(addr_out);
         }
+
+        // /dev/dri/renderD128: allocate the 1 MiB GL command buffer in
+        // process memory and notify the host. GLIO_INIT must have run
+        // first; the cmdbuf can only be mapped once per process.
+        if ofd.file_type == FileType::CharDevice
+            && VirtualDevice::from_host_handle(ofd.host_handle) == Some(VirtualDevice::DriRender0)
+        {
+            let state = proc.gl_state.as_ref().ok_or(Errno::EINVAL)?;
+            if !state.initialized {
+                return Err(Errno::EINVAL);
+            }
+            if state.cmdbuf.is_some() || proc.gl_binding.is_some() {
+                return Err(Errno::EINVAL);
+            }
+            if len != wasm_posix_shared::gl::CMDBUF_LEN {
+                return Err(Errno::EINVAL);
+            }
+            let alloc_flags = flags | MAP_ANONYMOUS;
+            let addr_out = proc.memory.mmap_anonymous(addr, len, prot, alloc_flags);
+            if addr_out == MAP_FAILED {
+                return Err(Errno::ENOMEM);
+            }
+            proc.gl_binding = Some(crate::process::GlBinding {
+                cmdbuf_addr: addr_out,
+                cmdbuf_len: len,
+            });
+            if let Some(s) = proc.gl_state.as_mut() {
+                s.cmdbuf = Some(crate::ofd::CmdbufBinding {
+                    addr: addr_out,
+                    len,
+                    submit_seq: 0,
+                });
+            }
+            host.gl_bind(proc.pid as i32, addr_out, len);
+            return Ok(addr_out);
+        }
     }
 
     // Allocate the region. Both anonymous and file-backed use the same
@@ -16495,5 +16531,84 @@ mod tests {
         let mut buf = [0u8; 8];
         let err = sys_ioctl(&mut p, &mut h, fd, 0xDEAD_u32, &mut buf).unwrap_err();
         assert_eq!(err, Errno::ENOTTY);
+    }
+
+    // ----- Task A7: sys_mmap binds the GL cmdbuf -----
+
+    #[test]
+    fn mmap_dri_renderd128_records_cmdbuf_and_calls_host() {
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+
+        let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        assert_ne!(addr, 0);
+
+        let b = p.gl_binding.expect("gl_binding should be Some after mmap");
+        assert_eq!(b.cmdbuf_addr, addr);
+        assert_eq!(b.cmdbuf_len, CMDBUF_LEN);
+
+        let cb = p.gl_state.as_ref().unwrap().cmdbuf.expect("cmdbuf record");
+        assert_eq!(cb.addr, addr);
+        assert_eq!(cb.len, CMDBUF_LEN);
+        assert_eq!(cb.submit_seq, 0);
+
+        assert_eq!(h.gl_bind_calls.len(), 1);
+        assert_eq!(h.gl_bind_calls[0],
+                   GlBindCall { pid: p.pid as i32, addr, len: CMDBUF_LEN });
+    }
+
+    #[test]
+    fn mmap_before_init_returns_einval() {
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        // No GLIO_INIT — gl_state is None.
+        let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                           PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+        assert!(p.gl_binding.is_none());
+        assert!(h.gl_bind_calls.is_empty());
+    }
+
+    #[test]
+    fn mmap_with_wrong_len_returns_einval() {
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN + 4096,
+                           PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+        assert!(p.gl_binding.is_none());
+        assert!(h.gl_bind_calls.is_empty());
+    }
+
+    #[test]
+    fn second_mmap_of_dri_renderd128_returns_einval() {
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let _a = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                          PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                           PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+        assert_eq!(h.gl_bind_calls.len(), 1);
     }
 }
