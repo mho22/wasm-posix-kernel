@@ -207,6 +207,49 @@ fn proc_has_fb0_fd(proc: &Process) -> bool {
     false
 }
 
+/// Try to claim `/dev/dri/renderD128` for the calling process.
+///
+/// Mirrors `acquire_fb0_or_busy`: single-owner with re-open by the same
+/// pid allowed; any other pid sees `EBUSY`.
+fn acquire_dri_render0_or_busy(pid: u32) -> Result<(), Errno> {
+    use core::sync::atomic::Ordering;
+    let pid = pid as i32;
+    let owner = crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst);
+    if owner != -1 && owner != pid {
+        return Err(Errno::EBUSY);
+    }
+    let _ = crate::process_table::GL_DEVICE_OWNER
+        .compare_exchange(-1, pid, Ordering::SeqCst, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Release `/dev/dri/renderD128` ownership held by `pid`, if any.
+/// Idempotent — safe to call from `close`, `munmap`, or process exit
+/// regardless of whether the process actually owned the device.
+pub(crate) fn maybe_release_dri_render0(pid: u32) {
+    use core::sync::atomic::Ordering;
+    let _ = crate::process_table::GL_DEVICE_OWNER
+        .compare_exchange(pid as i32, -1, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// True iff `proc` still has an open fd referencing `/dev/dri/renderD128`.
+fn proc_has_dri_render0_fd(proc: &Process) -> bool {
+    use crate::ofd::FileType;
+    for fd_i in 0..1024i32 {
+        if let Ok(entry) = proc.fd_table.get(fd_i) {
+            if let Some(ofd) = proc.ofd_table.get(entry.ofd_ref.0) {
+                if ofd.file_type == FileType::CharDevice
+                    && VirtualDevice::from_host_handle(ofd.host_handle)
+                        == Some(VirtualDevice::DriRender0)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Fixed framebuffer geometry. fbDOOM is happy with whatever the device
 /// reports; pinning a single mode keeps the implementation small.
 const FB_WIDTH: u32 = 640;
@@ -330,6 +373,8 @@ pub fn sys_open(
     if let Some(dev) = match_virtual_device(&resolved) {
         if dev == VirtualDevice::Fb0 {
             acquire_fb0_or_busy(proc.pid)?;
+        } else if dev == VirtualDevice::DriRender0 {
+            acquire_dri_render0_or_busy(proc.pid)?;
         }
         let status_flags = oflags & !CREATION_FLAGS;
         let ofd_idx = proc.ofd_table.create(
@@ -645,6 +690,15 @@ pub fn sys_close(
         && !proc_has_fb0_fd(proc)
     {
         maybe_release_fb0(proc.pid);
+    }
+
+    // Same release rule for /dev/dri/renderD128.
+    if file_type == FileType::CharDevice
+        && VirtualDevice::from_host_handle(host_handle) == Some(VirtualDevice::DriRender0)
+        && proc.gl_binding.is_none()
+        && !proc_has_dri_render0_fd(proc)
+    {
+        maybe_release_dri_render0(proc.pid);
     }
 
     Ok(())
@@ -5671,6 +5725,8 @@ pub fn sys_openat(
     if let Some(dev) = match_virtual_device(&resolved) {
         if dev == VirtualDevice::Fb0 {
             acquire_fb0_or_busy(proc.pid)?;
+        } else if dev == VirtualDevice::DriRender0 {
+            acquire_dri_render0_or_busy(proc.pid)?;
         }
         let status_flags = oflags & !CREATION_FLAGS;
         let ofd_idx = proc.ofd_table.create(
@@ -15814,6 +15870,45 @@ mod tests {
         let fd2 = sys_open(&mut proc2, &mut host, b"/dev/fb0", O_RDWR, 0).unwrap();
         sys_close(&mut proc2, &mut host, fd2).unwrap();
         assert_eq!(crate::process_table::FB0_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    /// Mutex serializing tests that touch the global GL_DEVICE_OWNER atomic.
+    static GL_DEVICE_OWNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn open_dri_renderd128_is_single_owner_across_pids() {
+        use crate::process_table::GL_DEVICE_OWNER;
+        use core::sync::atomic::Ordering;
+        let _g = GL_DEVICE_OWNER_LOCK.lock().unwrap();
+        GL_DEVICE_OWNER.store(-1, Ordering::SeqCst);
+
+        let mut pa = Process::new(11);
+        let mut pb = Process::new(12);
+        let mut host_a = MockHostIO::new();
+        let mut host_b = MockHostIO::new();
+
+        // pid=11 opens — succeeds, owns the device.
+        let fd_a = sys_open(&mut pa, &mut host_a, b"/dev/dri/renderD128", O_RDWR, 0).unwrap();
+        assert_eq!(GL_DEVICE_OWNER.load(Ordering::SeqCst), 11);
+
+        // pid=12 attempts — EBUSY.
+        let err = sys_open(&mut pb, &mut host_b, b"/dev/dri/renderD128", O_RDWR, 0).unwrap_err();
+        assert_eq!(err, Errno::EBUSY);
+
+        // Same pid (11) re-opens — allowed; returns a distinct fd.
+        let fd_a2 = sys_open(&mut pa, &mut host_a, b"/dev/dri/renderD128", O_RDWR, 0).unwrap();
+        assert_ne!(fd_a, fd_a2);
+
+        // Closing both fds in the owning process releases ownership.
+        sys_close(&mut pa, &mut host_a, fd_a).unwrap();
+        assert_eq!(GL_DEVICE_OWNER.load(Ordering::SeqCst), 11);
+        sys_close(&mut pa, &mut host_a, fd_a2).unwrap();
+        assert_eq!(GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+
+        // Now pid=12 can open.
+        let fd_b = sys_open(&mut pb, &mut host_b, b"/dev/dri/renderD128", O_RDWR, 0).unwrap();
+        sys_close(&mut pb, &mut host_b, fd_b).unwrap();
+        assert_eq!(GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
     }
 
     // ----- Task A4: HostIO GL trait methods -----

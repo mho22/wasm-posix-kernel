@@ -177,6 +177,16 @@ pub struct FbBinding {
     pub fmt: u32,
 }
 
+/// Per-process binding tracking the live mmap of the GL command buffer
+/// for `/dev/dri/renderD128`. Mirrors `FbBinding` for the GL device.
+#[derive(Debug, Clone, Copy)]
+pub struct GlBinding {
+    /// Offset within the process's wasm `Memory` where the cmdbuf starts.
+    pub cmdbuf_addr: usize,
+    /// Length in bytes. Always `shared::gl::CMDBUF_LEN` in v1.
+    pub cmdbuf_len: usize,
+}
+
 /// Per-thread state within a process.
 #[derive(Debug, Clone)]
 pub struct ThreadInfo {
@@ -362,6 +372,10 @@ pub struct Process {
     /// Live mmap of `/dev/fb0`, if any. `Some` between successful
     /// `mmap` and the matching `munmap`/process-exit/exec.
     pub fb_binding: Option<FbBinding>,
+    /// Live mmap of the GL cmdbuf for `/dev/dri/renderD128`, if any.
+    /// `Some` between successful `mmap` and the matching
+    /// `munmap`/process-exit/exec.
+    pub gl_binding: Option<GlBinding>,
 }
 
 impl Process {
@@ -441,6 +455,7 @@ impl Process {
             procfs_bufs: Vec::new(),
             has_exec: false,
             fb_binding: None,
+            gl_binding: None,
         }
     }
 
