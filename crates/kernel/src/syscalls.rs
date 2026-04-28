@@ -8624,6 +8624,16 @@ mod tests {
                             _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
         fn unbind_framebuffer(&mut self, _pid: i32) {}
         fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+        fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+        fn gl_unbind(&mut self, _pid: i32) {}
+        fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+        fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+        fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+        fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+        fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+        fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+        fn gl_present(&mut self, _pid: i32) {}
+        fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
     }
 
     #[test]
@@ -12141,6 +12151,42 @@ mod tests {
         len: usize,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlBindCall {
+        pid: i32,
+        addr: usize,
+        len: usize,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlAttrsCall {
+        pid: i32,
+        id: u32,
+        attrs: Vec<u8>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlMakeCurrentCall {
+        pid: i32,
+        ctx_id: u32,
+        surface_id: u32,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlSubmitCall {
+        pid: i32,
+        offset: usize,
+        length: usize,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlQueryCall {
+        pid: i32,
+        op: u32,
+        input: Vec<u8>,
+        out_len: usize,
+    }
+
     struct TrackingHostIO {
         next_handle: i64,
         last_open_path: Vec<u8>,
@@ -12162,6 +12208,16 @@ mod tests {
         bind_framebuffer_calls: Vec<BindFbCall>,
         unbind_framebuffer_calls: Vec<i32>,
         fb_write_calls: Vec<FbWriteCall>,
+        gl_bind_calls: Vec<GlBindCall>,
+        gl_unbind_calls: Vec<i32>,
+        gl_create_context_calls: Vec<GlAttrsCall>,
+        gl_destroy_context_calls: Vec<(i32, u32)>,
+        gl_create_surface_calls: Vec<GlAttrsCall>,
+        gl_destroy_surface_calls: Vec<(i32, u32)>,
+        gl_make_current_calls: Vec<GlMakeCurrentCall>,
+        gl_submit_calls: Vec<GlSubmitCall>,
+        gl_present_calls: Vec<i32>,
+        gl_query_calls: Vec<GlQueryCall>,
     }
 
     impl TrackingHostIO {
@@ -12187,6 +12243,16 @@ mod tests {
                 bind_framebuffer_calls: Vec::new(),
                 unbind_framebuffer_calls: Vec::new(),
                 fb_write_calls: Vec::new(),
+                gl_bind_calls: Vec::new(),
+                gl_unbind_calls: Vec::new(),
+                gl_create_context_calls: Vec::new(),
+                gl_destroy_context_calls: Vec::new(),
+                gl_create_surface_calls: Vec::new(),
+                gl_destroy_surface_calls: Vec::new(),
+                gl_make_current_calls: Vec::new(),
+                gl_submit_calls: Vec::new(),
+                gl_present_calls: Vec::new(),
+                gl_query_calls: Vec::new(),
             }
         }
     }
@@ -12356,6 +12422,45 @@ mod tests {
                 offset,
                 len: bytes.len(),
             });
+        }
+        fn gl_bind(&mut self, pid: i32, addr: usize, len: usize) {
+            self.gl_bind_calls.push(GlBindCall { pid, addr, len });
+        }
+        fn gl_unbind(&mut self, pid: i32) {
+            self.gl_unbind_calls.push(pid);
+        }
+        fn gl_create_context(&mut self, pid: i32, ctx_id: u32, attrs: &[u8]) {
+            self.gl_create_context_calls.push(GlAttrsCall { pid, id: ctx_id, attrs: attrs.to_vec() });
+        }
+        fn gl_destroy_context(&mut self, pid: i32, ctx_id: u32) {
+            self.gl_destroy_context_calls.push((pid, ctx_id));
+        }
+        fn gl_create_surface(&mut self, pid: i32, surface_id: u32, attrs: &[u8]) {
+            self.gl_create_surface_calls.push(GlAttrsCall { pid, id: surface_id, attrs: attrs.to_vec() });
+        }
+        fn gl_destroy_surface(&mut self, pid: i32, surface_id: u32) {
+            self.gl_destroy_surface_calls.push((pid, surface_id));
+        }
+        fn gl_make_current(&mut self, pid: i32, ctx_id: u32, surface_id: u32) {
+            self.gl_make_current_calls.push(GlMakeCurrentCall { pid, ctx_id, surface_id });
+        }
+        fn gl_submit(&mut self, pid: i32, offset: usize, length: usize) {
+            self.gl_submit_calls.push(GlSubmitCall { pid, offset, length });
+        }
+        fn gl_present(&mut self, pid: i32) {
+            self.gl_present_calls.push(pid);
+        }
+        fn gl_query(&mut self, pid: i32, op: u32, input: &[u8], out: &mut [u8]) -> i32 {
+            self.gl_query_calls.push(GlQueryCall {
+                pid, op,
+                input: input.to_vec(),
+                out_len: out.len(),
+            });
+            // Echo a deterministic 4-byte response so tests can assert that
+            // the kernel receives what the host wrote.
+            let n = out.len().min(4);
+            out[..n].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF][..n]);
+            n as i32
         }
     }
 
@@ -12849,6 +12954,16 @@ mod tests {
             fn bind_framebuffer(&mut self, _pid: i32, _addr: usize, _len: usize, _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
             fn unbind_framebuffer(&mut self, _pid: i32) {}
             fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+            fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+            fn gl_unbind(&mut self, _pid: i32) {}
+            fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+            fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+            fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+            fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+            fn gl_present(&mut self, _pid: i32) {}
+            fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
         }
 
         let mut proc = Process::new(1);
@@ -14503,6 +14618,16 @@ mod tests {
             fn bind_framebuffer(&mut self, _pid: i32, _addr: usize, _len: usize, _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
             fn unbind_framebuffer(&mut self, _pid: i32) {}
             fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+            fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+            fn gl_unbind(&mut self, _pid: i32) {}
+            fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+            fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+            fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+            fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+            fn gl_present(&mut self, _pid: i32) {}
+            fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
         }
 
         let mut proc = Process::new(1);
@@ -14589,6 +14714,16 @@ mod tests {
             fn bind_framebuffer(&mut self, _pid: i32, _addr: usize, _len: usize, _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
             fn unbind_framebuffer(&mut self, _pid: i32) {}
             fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+            fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+            fn gl_unbind(&mut self, _pid: i32) {}
+            fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+            fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+            fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+            fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+            fn gl_present(&mut self, _pid: i32) {}
+            fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
         }
 
         let mut proc = Process::new(1);
@@ -14684,6 +14819,16 @@ mod tests {
             fn bind_framebuffer(&mut self, _pid: i32, _addr: usize, _len: usize, _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
             fn unbind_framebuffer(&mut self, _pid: i32) {}
             fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+            fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+            fn gl_unbind(&mut self, _pid: i32) {}
+            fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+            fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+            fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+            fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+            fn gl_present(&mut self, _pid: i32) {}
+            fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
         }
 
         let mut proc = Process::new(1);
@@ -15669,5 +15814,110 @@ mod tests {
         let fd2 = sys_open(&mut proc2, &mut host, b"/dev/fb0", O_RDWR, 0).unwrap();
         sys_close(&mut proc2, &mut host, fd2).unwrap();
         assert_eq!(crate::process_table::FB0_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    // ----- Task A4: HostIO GL trait methods -----
+    //
+    // These tests exercise the trait surface in isolation (no syscall plumbing
+    // yet — that arrives in A5/A6). They verify TrackingHostIO records each
+    // call and forwards the right arguments.
+
+    #[test]
+    fn gl_bind_records_pid_addr_len() {
+        let mut host = TrackingHostIO::new();
+        host.gl_bind(7, 0x10_0000, wasm_posix_shared::gl::CMDBUF_LEN as usize);
+        assert_eq!(host.gl_bind_calls.len(), 1);
+        assert_eq!(host.gl_bind_calls[0],
+                   GlBindCall { pid: 7, addr: 0x10_0000,
+                                len: wasm_posix_shared::gl::CMDBUF_LEN as usize });
+    }
+
+    #[test]
+    fn gl_unbind_records_pid_and_is_idempotent() {
+        let mut host = TrackingHostIO::new();
+        host.gl_unbind(11);
+        host.gl_unbind(11);
+        assert_eq!(host.gl_unbind_calls, alloc::vec![11, 11]);
+    }
+
+    #[test]
+    fn gl_create_context_forwards_attrs_payload() {
+        let mut host = TrackingHostIO::new();
+        let attrs = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        host.gl_create_context(3, 42, &attrs);
+        assert_eq!(host.gl_create_context_calls.len(), 1);
+        let call = &host.gl_create_context_calls[0];
+        assert_eq!(call.pid, 3);
+        assert_eq!(call.id, 42);
+        assert_eq!(call.attrs, attrs);
+    }
+
+    #[test]
+    fn gl_destroy_context_records_pair() {
+        let mut host = TrackingHostIO::new();
+        host.gl_destroy_context(3, 42);
+        assert_eq!(host.gl_destroy_context_calls, alloc::vec![(3, 42)]);
+    }
+
+    #[test]
+    fn gl_create_surface_forwards_attrs_payload() {
+        let mut host = TrackingHostIO::new();
+        let attrs = [0u8; 32];
+        host.gl_create_surface(5, 1, &attrs);
+        assert_eq!(host.gl_create_surface_calls.len(), 1);
+        let call = &host.gl_create_surface_calls[0];
+        assert_eq!(call.pid, 5);
+        assert_eq!(call.id, 1);
+        assert_eq!(call.attrs.len(), 32);
+    }
+
+    #[test]
+    fn gl_destroy_surface_records_pair() {
+        let mut host = TrackingHostIO::new();
+        host.gl_destroy_surface(5, 1);
+        assert_eq!(host.gl_destroy_surface_calls, alloc::vec![(5, 1)]);
+    }
+
+    #[test]
+    fn gl_make_current_records_triple() {
+        let mut host = TrackingHostIO::new();
+        host.gl_make_current(3, 42, 1);
+        assert_eq!(host.gl_make_current_calls.len(), 1);
+        assert_eq!(host.gl_make_current_calls[0],
+                   GlMakeCurrentCall { pid: 3, ctx_id: 42, surface_id: 1 });
+    }
+
+    #[test]
+    fn gl_submit_records_offset_length() {
+        let mut host = TrackingHostIO::new();
+        host.gl_submit(3, 0, 256);
+        host.gl_submit(3, 256, 128);
+        assert_eq!(host.gl_submit_calls.len(), 2);
+        assert_eq!(host.gl_submit_calls[1],
+                   GlSubmitCall { pid: 3, offset: 256, length: 128 });
+    }
+
+    #[test]
+    fn gl_present_records_pid() {
+        let mut host = TrackingHostIO::new();
+        host.gl_present(3);
+        assert_eq!(host.gl_present_calls, alloc::vec![3]);
+    }
+
+    #[test]
+    fn gl_query_records_io_and_returns_byte_count() {
+        let mut host = TrackingHostIO::new();
+        let input = [0xAAu8, 0xBB, 0xCC, 0xDD];
+        let mut out = [0u8; 8];
+        let n = host.gl_query(3, wasm_posix_shared::gl::QOP_GET_ERROR, &input, &mut out);
+        // TrackingHostIO echoes 4 deterministic bytes regardless of op.
+        assert_eq!(n, 4);
+        assert_eq!(&out[..4], &[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(host.gl_query_calls.len(), 1);
+        let call = &host.gl_query_calls[0];
+        assert_eq!(call.pid, 3);
+        assert_eq!(call.op, wasm_posix_shared::gl::QOP_GET_ERROR);
+        assert_eq!(call.input, input);
+        assert_eq!(call.out_len, 8);
     }
 }

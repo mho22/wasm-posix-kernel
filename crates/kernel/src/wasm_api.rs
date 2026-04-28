@@ -97,6 +97,20 @@ unsafe extern "C" {
     );
     fn host_unbind_framebuffer(pid: i32);
     fn host_fb_write(pid: i32, offset: usize, src: *const u8, len: usize);
+    fn host_gl_bind(pid: i32, addr: usize, len: usize);
+    fn host_gl_unbind(pid: i32);
+    fn host_gl_create_context(pid: i32, ctx_id: u32, attrs_ptr: *const u8, attrs_len: usize);
+    fn host_gl_destroy_context(pid: i32, ctx_id: u32);
+    fn host_gl_create_surface(pid: i32, surface_id: u32, attrs_ptr: *const u8, attrs_len: usize);
+    fn host_gl_destroy_surface(pid: i32, surface_id: u32);
+    fn host_gl_make_current(pid: i32, ctx_id: u32, surface_id: u32);
+    fn host_gl_submit(pid: i32, offset: usize, length: usize);
+    fn host_gl_present(pid: i32);
+    fn host_gl_query(
+        pid: i32, op: u32,
+        in_ptr: *const u8, in_len: usize,
+        out_ptr: *mut u8, out_len: usize,
+    ) -> i32;
 }
 
 // ---------------------------------------------------------------------------
@@ -595,6 +609,52 @@ impl HostIO for WasmHostIO {
 
     fn fb_write(&mut self, pid: i32, offset: usize, bytes: &[u8]) {
         unsafe { host_fb_write(pid, offset, bytes.as_ptr(), bytes.len()) }
+    }
+
+    fn gl_bind(&mut self, pid: i32, addr: usize, len: usize) {
+        unsafe { host_gl_bind(pid, addr, len) }
+    }
+
+    fn gl_unbind(&mut self, pid: i32) {
+        unsafe { host_gl_unbind(pid) }
+    }
+
+    fn gl_create_context(&mut self, pid: i32, ctx_id: u32, attrs: &[u8]) {
+        unsafe { host_gl_create_context(pid, ctx_id, attrs.as_ptr(), attrs.len()) }
+    }
+
+    fn gl_destroy_context(&mut self, pid: i32, ctx_id: u32) {
+        unsafe { host_gl_destroy_context(pid, ctx_id) }
+    }
+
+    fn gl_create_surface(&mut self, pid: i32, surface_id: u32, attrs: &[u8]) {
+        unsafe { host_gl_create_surface(pid, surface_id, attrs.as_ptr(), attrs.len()) }
+    }
+
+    fn gl_destroy_surface(&mut self, pid: i32, surface_id: u32) {
+        unsafe { host_gl_destroy_surface(pid, surface_id) }
+    }
+
+    fn gl_make_current(&mut self, pid: i32, ctx_id: u32, surface_id: u32) {
+        unsafe { host_gl_make_current(pid, ctx_id, surface_id) }
+    }
+
+    fn gl_submit(&mut self, pid: i32, offset: usize, length: usize) {
+        unsafe { host_gl_submit(pid, offset, length) }
+    }
+
+    fn gl_present(&mut self, pid: i32) {
+        unsafe { host_gl_present(pid) }
+    }
+
+    fn gl_query(&mut self, pid: i32, op: u32, input: &[u8], out: &mut [u8]) -> i32 {
+        unsafe {
+            host_gl_query(
+                pid, op,
+                input.as_ptr(), input.len(),
+                out.as_mut_ptr(), out.len(),
+            )
+        }
     }
 }
 

@@ -114,6 +114,42 @@ pub trait HostIO {
     /// copy into. Geometry/format come from a prior `bind_framebuffer`
     /// call with `addr=0, len=0` (the sentinel "write-based binding").
     fn fb_write(&mut self, pid: i32, offset: usize, bytes: &[u8]);
+
+    /// Notify the host that process `pid` has mapped its GL cmdbuf at the
+    /// given offset within its wasm `Memory`. Length is always
+    /// `shared::gl::CMDBUF_LEN` in v1.
+    fn gl_bind(&mut self, pid: i32, addr: usize, len: usize);
+
+    /// Notify the host that the GL cmdbuf for `pid` is gone (`munmap`,
+    /// process exit, or exec). Idempotent.
+    fn gl_unbind(&mut self, pid: i32);
+
+    /// Allocate a host-side WebGL context. `ctx_id` is the per-fd id chosen
+    /// by the kernel; `attrs` is a marshalled `shared::gl::GlContextAttrs`.
+    fn gl_create_context(&mut self, pid: i32, ctx_id: u32, attrs: &[u8]);
+    fn gl_destroy_context(&mut self, pid: i32, ctx_id: u32);
+
+    /// Allocate a host-side surface (default canvas or pbuffer). `attrs`
+    /// is a marshalled `shared::gl::GlSurfaceAttrs`.
+    fn gl_create_surface(&mut self, pid: i32, surface_id: u32, attrs: &[u8]);
+    fn gl_destroy_surface(&mut self, pid: i32, surface_id: u32);
+
+    /// Bind ctx + surface as the current rendering target for `pid`.
+    fn gl_make_current(&mut self, pid: i32, ctx_id: u32, surface_id: u32);
+
+    /// Decode and dispatch one cmdbuf submit. `offset` / `length` are
+    /// within the bound cmdbuf region (validated by the kernel against
+    /// `shared::gl::CMDBUF_LEN`).
+    fn gl_submit(&mut self, pid: i32, offset: usize, length: usize);
+
+    /// Flush any pending GL work and signal "frame ready". v1 no-op
+    /// (canvas presents on the next RAF); kept as a hook for future
+    /// fence/sync work.
+    fn gl_present(&mut self, pid: i32);
+
+    /// Synchronous GL query (`glGetError`, `glReadPixels`, etc.).
+    /// Returns bytes written into `out`, or negative errno on failure.
+    fn gl_query(&mut self, pid: i32, op: u32, input: &[u8], out: &mut [u8]) -> i32;
 }
 
 /// Process lifecycle state.
