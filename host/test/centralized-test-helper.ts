@@ -265,6 +265,14 @@ async function runOnMainThread(options: RunProgramOptions): Promise<RunProgramRe
           kernelWorker.unregisterProcess(childPid);
           workers.delete(childPid);
         });
+        // centralizedWorkerMain catches its own throws and posts {type:"error"};
+        // without this listener those payloads silently leak state.
+        childWorker.on("message", (m: unknown) => {
+          const msg = m as WorkerToHostMessage;
+          if (msg.type !== "error") return;
+          kernelWorker.unregisterProcess(childPid);
+          workers.delete(childPid);
+        });
 
         return [childChannelOffset];
       },
@@ -310,6 +318,14 @@ async function runOnMainThread(options: RunProgramOptions): Promise<RunProgramRe
         workers.set(execPid, newWorker);
         newWorker.on("error", (err: Error) => {
           console.error(`[exec] worker error for pid ${execPid}:`, err);
+        });
+        newWorker.on("message", (m: unknown) => {
+          const msg = m as WorkerToHostMessage;
+          if (msg.type !== "error") return;
+          console.error(`[exec] worker reported error for pid ${execPid}: ${msg.message}`);
+          kernelWorker.unregisterProcess(execPid);
+          workers.delete(execPid);
+          processProgramBytes.delete(execPid);
         });
 
         return 0;
@@ -425,6 +441,14 @@ async function runOnMainThread(options: RunProgramOptions): Promise<RunProgramRe
   mainWorker.on("error", (err: Error) => {
     clearTimeout(timer);
     rejectExit(err);
+  });
+  // Without this, instantiation failures post {type:"error"} but never
+  // resolve exitPromise — the test hangs to vitest's own timeout.
+  mainWorker.on("message", (m: unknown) => {
+    const msg = m as WorkerToHostMessage;
+    if (msg.type !== "error") return;
+    clearTimeout(timer);
+    rejectExit(new Error(msg.message));
   });
 
   // The worker posts {type:"error"} from its top-level catch (e.g. ABI
