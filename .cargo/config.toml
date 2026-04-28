@@ -7,7 +7,14 @@ rustflags = ["-C", "target-feature=+atomics,+bulk-memory,+mutable-globals"]
 [target.wasm64-unknown-unknown]
 rustflags = [
   "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
+  # --import-memory is required: starting with nightly-2025-10-03, rustc/lld
+  # stopped auto-injecting it when --shared-memory is set, so without it the
+  # kernel allocates a private internal memory and the host's
+  # SharedArrayBuffer is unreachable (channel handshake silently no-ops).
+  "-C", "link-arg=--import-memory",
   "-C", "link-arg=--export-memory",
   "-C", "link-arg=--shared-memory",
   "-C", "link-arg=--max-memory=1073741824",
+  "-C", "panic=immediate-abort",
+  "-Z", "unstable-options",
 ]
