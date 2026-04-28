@@ -36,7 +36,7 @@ The bridge is **one** new QuickJS C native module exposing four namespaces (`has
 
 | # | Phase | Title (matches existing commit style) |
 |---|-------|---------------------------------------|
-| 0a | 0 | `fix(build): restore build.sh under current nightly toolchain` |
+| 0a | 0 | `fix(build): restore build under current nightly toolchain` |
 | 0b | 0 | `fix(quickjs): drop nonexistent cutils.c refs from build-quickjs.sh` |
 | 0c | 0 | `fix(kernel): restore JS_Eval — root-cause QuickJS stack overflow` |
 | 0d | 0 | `docs(plan): QuickJS-NG Node compat — Phase 0 verification` |
@@ -68,95 +68,143 @@ ABI snapshot regen + `ABI_VERSION` bump if any kernel/shared/struct surface move
 
 Phase 0 fixes blockers found before any feature work can land. **Four sub-PRs**, each focused, each upstream-shippable. Order matters — the stack-overflow bisect (0c) requires a working build (0a) and a working `build-quickjs.sh` on a fresh clone (0b).
 
-### Phase 0a — `fix(build): restore build.sh under current nightly toolchain`
+### Phase 0a — `fix(build): restore build under current nightly toolchain`
 
-**Symptom:** `bash build.sh` fails on `cargo build … -Z build-std-features=panic_immediate_abort`. Current nightly removed the build-std-feature; `panic_immediate_abort` is now a real panic strategy enabled via `-Cpanic=immediate-abort` (plus `-Zunstable-options`).
+**Symptom:** Every kernel-build entrypoint fails on `cargo build … -Z build-std-features=panic_immediate_abort`. Current nightly removed the build-std-feature; `panic_immediate_abort` is now a real panic strategy. The compiler error itself prescribes the new spelling:
 
-**Two viable approaches.** Pick exactly one based on which keeps the kernel reproducible:
-1. **Update `build.sh`** to emit the new flag form: `-Zunstable-options` + `-Cpanic=immediate-abort` via `RUSTFLAGS`, keeping `-Zbuild-std=core,alloc`.
-2. **Pin `rust-toolchain.toml`** to the last nightly that accepts the old flag.
+> `panic_immediate_abort` is now a real panic strategy! Enable it with `panic = "immediate-abort"` in Cargo.toml, or with the compiler flags `-Zunstable-options -Cpanic=immediate-abort`. In both cases, you still need to build core, e.g. with `-Zbuild-std`.
 
-Approach 1 is preferred — it tracks upstream rust without freezing the project's nightly.
+**Three call sites are affected**, not one (verified by `grep -nE "build-std-features=panic_immediate_abort"`):
 
-#### Task 0a.1 — Probe the right invocation under current nightly
+- `build.sh:7` — main build entrypoint
+- `run.sh:107` — demo runner's `need_kernel()`
+- `scripts/check-abi-version.sh:36` — the ABI snapshot script invoked by step 5 of the verification gauntlet itself
 
-**Files:** none (probe only)
+A PR that updates only `build.sh` would leave `run.sh` broken **and would fail its own verification gauntlet** because step 5 invokes the still-broken `scripts/check-abi-version.sh`. All three must move together.
 
-**Steps:**
-1. From the repo root, with current `rustc 1.97.0-nightly` (or whichever nightly is installed):
-   ```bash
-   rustc --version
-   RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
-   cargo build --release -p wasm-posix-kernel \
-     -Z build-std=core,alloc
-   ```
-2. Confirm exit 0 and that `target/wasm64-unknown-unknown/release/wasm_posix_kernel.wasm` is produced.
-3. Compare wasm size against the committed `host/wasm/wasm_posix_kernel.wasm`. Within ~5 KB of the committed binary is fine; large drift triggers ABI snapshot check in step 0a.4.
+**Approach.** Do **both** — update flags *and* pin the toolchain — for two independent reasons:
 
-**Verification:** `wasm_posix_kernel.wasm` exists and `bash scripts/check-abi-version.sh` shows no unexpected drift (run after copying into `host/wasm/`).
+1. **Update the flag form** in all three scripts to `RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort"`. This is the minimum to unblock current nightly.
+2. **Pin `rust-toolchain.toml` to a specific dated nightly** (today: `nightly-2026-04-27`, the one that produces the new error message). The current pin is open-ended `channel = "nightly"` — which is precisely what let three scripts silently break the moment upstream rust shipped a breaking change. Without a date pin, this exact PR happens again the next time upstream churns.
 
-#### Task 0a.2 — Update `build.sh`
+The original plan picked "Approach 1 alone" with the rationale that it tracks upstream rust. Investigation revised this: tracking upstream means tracking *any* breaking change in the build-std flag surface, with no firewall. A dated pin makes future upstream churn an explicit decision (bump the date, see what breaks, fix or revert) rather than a surprise broken `main`.
 
-**Files:**
+#### Task 0a.1 — Probe the right invocation under current nightly *(verified)*
+
+Already executed during plan revision. Recorded outcome:
+
+```bash
+$ rustc --version
+rustc 1.97.0-nightly (52b6e2c20 2026-04-27)
+
+$ RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
+  cargo build --release -p wasm-posix-kernel -Z build-std=core,alloc
+…
+Finished `release` profile [optimized] target(s) in 6.96s
+
+$ stat -f "%z" target/wasm64-unknown-unknown/release/wasm_posix_kernel.wasm
+416242                                  # fresh build
+$ stat -f "%z" host/wasm/wasm_posix_kernel.wasm
+441836                                  # committed
+```
+
+**Wasm size drifted ~25 KB** (~6%) vs. the committed binary, exceeding the original "~5 KB" tolerance. The drift is almost certainly codegen — `lto = true` + `opt-level = "s"` + a newer nightly's compiler_builtins emit different bytes — but only the ABI snapshot check (Task 0a.5) can confirm that no structural surface (channel layout, syscall numbers, marshalled structs, kernel-wasm exports) shifted.
+
+#### Task 0a.2 — Update all three cargo call sites
+
+**Files (all three must change in one PR):**
 - Modify: `build.sh`
+- Modify: `run.sh`
+- Modify: `scripts/check-abi-version.sh`
 
-**Step 1: Replace the cargo invocation (lines 5–7).**
+For each, replace the existing block:
 
-Old:
 ```bash
 cargo build --release -p wasm-posix-kernel \
   -Z build-std=core,alloc \
   -Z build-std-features=panic_immediate_abort
 ```
 
-New:
+with:
+
 ```bash
 RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
 cargo build --release -p wasm-posix-kernel \
   -Z build-std=core,alloc
 ```
 
-(Keep the `RUSTFLAGS=` inline so it doesn't leak into other cargo invocations later in the script.)
+(Keep the `RUSTFLAGS=` inline so it doesn't leak into other cargo invocations later in each script.)
 
-**Step 2: Sanity-check the rest of `build.sh` is unchanged.** No other lines need to move.
-
-**Step 3: Run the full build end-to-end:**
+**Verify the grep is clean afterwards:**
 ```bash
-bash build.sh
+grep -rnE "build-std-features=panic_immediate_abort" build.sh run.sh scripts/
+```
+Expected: no matches.
+
+#### Task 0a.3 — Pin the nightly date in `rust-toolchain.toml`
+
+**File:** `rust-toolchain.toml`
+
+Current contents:
+```toml
+[toolchain]
+channel = "nightly"
+targets = ["wasm32-unknown-unknown"]
 ```
 
-Expected: builds Rust kernel, copies wasm, builds user programs (if `programs/*.c` exists), runs `npm install` + `npm run build` in `host/`. Exit 0.
+New contents:
+```toml
+[toolchain]
+channel = "nightly-2026-04-27"
+targets = ["wasm32-unknown-unknown"]
+```
 
-#### Task 0a.3 — Document the change
+Use whichever nightly date the developer running 0a actually has installed and has verified produces a green build. Future toolchain bumps become a one-line edit + verification gauntlet, never a silent break.
+
+(The repo has no `rust-toolchain` plain-text file — only `.toml` — so no second file to update.)
+
+#### Task 0a.4 — Document the change
 
 **Files:**
-- Modify: `docs/posix-status.md` (if a "build" / "toolchain" section exists; otherwise skip)
-- Modify: `README.md` (only if the README documents the cargo flag explicitly)
+- Inspect: `docs/posix-status.md`, `README.md`, `docs/architecture.md`
+- Modify only if any of them quote the cargo flag verbatim.
 
-Most likely no doc changes needed — the build flag is internal. Inspect to confirm.
+Most likely no doc changes needed — the build flag is internal. The historical plan files under `docs/plans/2026-03-08-*.md` reference the old flag in build invocations; these are historical records of past sessions and should **not** be retroactively edited.
 
-#### Task 0a.4 — Run the full verification gauntlet
+#### Task 0a.5 — Run the full verification gauntlet
 
 ```bash
-cargo test -p wasm-posix-kernel --target aarch64-apple-darwin --lib
-(cd host && npx vitest run)
-scripts/run-libc-tests.sh
-scripts/run-posix-tests.sh
-bash scripts/check-abi-version.sh
+bash build.sh                                                          # exit 0
+cargo test -p wasm-posix-kernel --target aarch64-apple-darwin --lib    # 539+ pass, 0 fail
+(cd host && npx vitest run)                                            # all files pass
+scripts/run-libc-tests.sh                                              # 0 unexpected FAIL
+scripts/run-posix-tests.sh                                             # 0 FAIL
+bash scripts/check-abi-version.sh                                      # exit 0
 ```
 
-Expected: all green. The kernel wasm bytes should match the committed snapshot — if not, regenerate (`bash scripts/check-abi-version.sh update`) and inspect the diff. A pure flag rewrite should produce identical bytes; if it doesn't, decide whether the diff is incidental or ABI-affecting before bumping `ABI_VERSION`.
+**Handling the 25 KB wasm drift:**
 
-#### Task 0a.5 — Commit & PR
+1. Run `bash scripts/check-abi-version.sh` (now using the new flag form).
+2. If it reports drift in `abi/snapshot.json`:
+   - Run `bash scripts/check-abi-version.sh update` to regenerate.
+   - `git diff abi/snapshot.json` and inspect.
+   - **Codegen-only drift** (different LTO output, no change to channel header, syscall numbers, struct layouts, or export list) → commit the regenerated snapshot **without** bumping `ABI_VERSION`. Add a one-line note in the PR body.
+   - **Structural drift** (any change to the surfaces enumerated in CLAUDE.md "Kernel ABI stability") → bump `ABI_VERSION` in `crates/shared/src/lib.rs` in the same commit.
+3. Re-run `bash scripts/check-abi-version.sh` — must exit 0 before proceeding.
+
+Also commit the rebuilt `host/wasm/wasm_posix_kernel.wasm` if its bytes changed. Treat the new bytes as the canonical reference for downstream work.
+
+#### Task 0a.6 — Commit & PR
 
 ```bash
-git checkout -b fix-build-sh-toolchain origin/main
-git add build.sh
-# Plus host/wasm/wasm_posix_kernel.wasm and abi/snapshot.json IF they changed
-git commit -m "fix(build): restore build.sh under current nightly toolchain"
-git push -u origin fix-build-sh-toolchain
+git checkout -b fix-build-toolchain origin/main
+git add build.sh run.sh scripts/check-abi-version.sh rust-toolchain.toml
+# Plus host/wasm/wasm_posix_kernel.wasm and abi/snapshot.json IF they changed.
+# Plus crates/shared/src/lib.rs IF ABI_VERSION bumped.
+git commit -m "fix(build): restore build under current nightly toolchain"
+git push -u origin fix-build-toolchain
 gh pr create --base main \
-  --title "fix(build): restore build.sh under current nightly" \
+  --title "fix(build): restore build under current nightly toolchain" \
   --body "..." # see template below
 ```
 
@@ -164,17 +212,30 @@ PR body template:
 ```
 ## Summary
 
-Current nightly removed the build-std-feature `panic_immediate_abort`; it's now
-a real panic strategy enabled via `-Cpanic=immediate-abort` + `-Zunstable-options`.
-Update `build.sh` to use the new invocation form. Kernel wasm output unchanged.
+Current nightly turned `panic_immediate_abort` from a build-std-feature into a
+real panic strategy. The new spelling is `-Zunstable-options -Cpanic=immediate-abort`
+via `RUSTFLAGS`. Three scripts hard-coded the old form — `build.sh`, `run.sh`, and
+`scripts/check-abi-version.sh` — so a partial fix would leave the verification
+gauntlet itself broken.
+
+This PR:
+1. Updates all three scripts to the new flag form.
+2. Pins `rust-toolchain.toml` to `nightly-2026-04-27` (a specific date), so the
+   next breaking upstream change becomes an explicit toolchain bump rather than
+   a silent break in main.
+
+Kernel wasm rebuild produced a ~25 KB size delta from the committed binary;
+`scripts/check-abi-version.sh` confirms this is codegen-only / ABI-clean
+[OR: requires an ABI_VERSION bump because <surface> shifted — pick one in the PR].
 
 ## Test plan
 
 - [ ] `bash build.sh` exits 0
 - [ ] `cargo test -p wasm-posix-kernel --target aarch64-apple-darwin --lib` — 0 failures
-- [ ] `scripts/check-abi-version.sh` — exit 0
+- [ ] `(cd host && npx vitest run)` — all pass
 - [ ] `scripts/run-libc-tests.sh` — 0 unexpected FAIL
 - [ ] `scripts/run-posix-tests.sh` — 0 FAIL
+- [ ] `scripts/check-abi-version.sh` — exit 0 (with regenerated snapshot if codegen drift, or `ABI_VERSION` bump if structural)
 ```
 
 ---
@@ -333,7 +394,7 @@ Expected: 1 fail. The repro is now deterministic and machine-checkable.
    git worktree add ../qjs-bisect-base 18bfe4b6
    cd ../qjs-bisect-base
    ```
-2. Set `ABI_VERSION` and rebuild, applying the Phase 0a workaround to `build.sh` if needed (current nightly).
+2. Apply the Phase 0a workaround inline to **both** `build.sh` and `run.sh` in the worktree (sed-replace the old `-Z build-std-features=panic_immediate_abort` block with the new `RUSTFLAGS` form). At `18bfe4b6`, `scripts/check-abi-version.sh` does not yet exist, so only those two files need patching. Do **not** commit the patches — they only need to live in the bisect worktree.
 3. Build sysroot + kernel + qjs.wasm:
    ```bash
    git submodule update --init musl
@@ -598,7 +659,7 @@ qjs -e / node -e roundtrip — see host/test/quickjs-eval-smoke.test.ts.
 …
 
 ## Foundation fixes shipped
-- fix(build): restore build.sh under current nightly toolchain (#…)
+- fix(build): restore build under current nightly toolchain (#…)
 - fix(quickjs): drop nonexistent cutils.c refs from build-quickjs.sh (#…)
 - fix(kernel): restore JS_Eval — root-cause QuickJS stack overflow (#…)
 ```
