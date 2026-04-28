@@ -246,8 +246,25 @@ function handleSpawn(msg: SpawnMessage) {
       ptrWidth,
     });
 
-    worker.on("error", (err: Error) => {
-      console.error(`[kernel-worker] Worker error pid=${pid}:`, err.message);
+    const failProcess = (reason: string) => {
+      const text = `[kernel-worker] pid=${pid}: ${reason}\n`;
+      post({ type: "stderr", pid, data: new TextEncoder().encode(text) });
+      try { kernelWorker.deactivateProcess(pid); } catch {}
+      worker.terminate().catch(() => {});
+      processes.delete(pid);
+      threadModuleCache.delete(pid);
+      ptyByPid.delete(pid);
+      post({ type: "exit", pid, status: -1 });
+    };
+
+    worker.on("error", (err: Error) => failProcess(`worker error: ${err.message ?? err}`));
+
+    // centralizedWorkerMain catches its own throws (ABI mismatch, instantiation
+    // failure) and posts {type:"error", message} instead of re-throwing —
+    // without this listener those errors silently hang spawn().
+    worker.on("message", (m: unknown) => {
+      const msg = m as WorkerToHostMessage;
+      if (msg.type === "error") failProcess(msg.message);
     });
 
     respond(msg.requestId, pid);

@@ -5,12 +5,29 @@
 import { describe, it, expect } from "vitest";
 import { parseDylinkSection, loadSharedLibrary, loadSharedLibrarySync, DynamicLinker, type LoadSharedLibraryOptions } from "../src/dylink.ts";
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const CLANG = "/opt/homebrew/opt/llvm@21/bin/clang";
-const WASM_LD = "/opt/homebrew/bin/wasm-ld";
+// Mirror find_llvm_bin from scripts/build-programs.sh:
+// $LLVM_BIN → brew --prefix llvm → /opt/homebrew/opt/llvm@<N> → clang.
+function findClang(): string {
+  const envBin = process.env.LLVM_BIN;
+  if (envBin && existsSync(`${envBin}/clang`)) return `${envBin}/clang`;
+  try {
+    const brewPrefix = execSync("brew --prefix llvm", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString().trim();
+    if (brewPrefix && existsSync(`${brewPrefix}/bin/clang`)) return `${brewPrefix}/bin/clang`;
+  } catch {}
+  for (const v of [21, 20, 19, 18, 17, 16, 15]) {
+    const p = `/opt/homebrew/opt/llvm@${v}/bin/clang`;
+    if (existsSync(p)) return p;
+  }
+  return "clang";
+}
+
+const CLANG = findClang();
+const WASM_LD = "wasm-ld";
 
 /** Build a shared Wasm library from C source. */
 function buildSharedLib(source: string, name: string, opts?: { allowUndefined?: boolean }): Uint8Array {
