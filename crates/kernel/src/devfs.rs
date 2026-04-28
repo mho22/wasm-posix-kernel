@@ -31,6 +31,8 @@ pub enum DevfsEntry {
     MqueueDir,
     /// /dev/fd
     FdDir,
+    /// /dev/dri (DRM render-node directory; contains renderD128).
+    DriDir,
 }
 
 /// Match a resolved path to a devfs directory entry.
@@ -41,6 +43,7 @@ pub fn match_devfs_dir(path: &[u8]) -> Option<DevfsEntry> {
         b"/dev/shm" => Some(DevfsEntry::ShmDir),
         b"/dev/mqueue" => Some(DevfsEntry::MqueueDir),
         b"/dev/fd" => Some(DevfsEntry::FdDir),
+        b"/dev/dri" => Some(DevfsEntry::DriDir),
         _ => None,
     }
 }
@@ -170,6 +173,12 @@ fn dir_entries(
             entries.push((b"pts".into(), DT_DIR, devfs_ino(b"/dev/pts")));
             entries.push((b"shm".into(), DT_DIR, devfs_ino(b"/dev/shm")));
             entries.push((b"mqueue".into(), DT_DIR, devfs_ino(b"/dev/mqueue")));
+            entries.push((b"dri".into(), DT_DIR, devfs_ino(b"/dev/dri")));
+        }
+        DevfsEntry::DriDir => {
+            // Single render-node entry; mirrors Linux distros' /dev/dri layout
+            // when only render-only access (no KMS) is exposed.
+            entries.push((b"renderD128".into(), DT_CHR, devfs_ino(b"/dev/dri/renderD128")));
         }
         DevfsEntry::PtsDir => {
             // List active PTY slaves
@@ -258,6 +267,43 @@ mod tests {
         for (name, dtype, _) in entries.iter() {
             if name == b"fb0" {
                 assert_eq!(*dtype, DT_CHR);
+            }
+        }
+    }
+
+    #[test]
+    fn dev_dri_is_recognized_as_directory() {
+        assert_eq!(match_devfs_dir(b"/dev/dri"), Some(DevfsEntry::DriDir));
+        let st = match_devfs_stat(b"/dev/dri", 0, 0).unwrap();
+        assert_eq!(st.st_mode & 0o170000, S_IFDIR);
+        // /dev/dri/renderD128 is the char device, not a devfs subdir.
+        assert_eq!(match_devfs_dir(b"/dev/dri/renderD128"), None);
+    }
+
+    #[test]
+    fn dev_dri_lists_only_renderd128() {
+        let proc = crate::process::Process::new(1);
+        let entries = dir_entries(&proc, &DevfsEntry::DriDir);
+        let names: Vec<&[u8]> = entries.iter().map(|(n, _, _)| n.as_slice()).collect();
+        assert_eq!(names, vec![&b"renderD128"[..]]);
+        // Single entry, listed as a character device.
+        for (name, dtype, _) in entries.iter() {
+            if name == b"renderD128" {
+                assert_eq!(*dtype, DT_CHR);
+            }
+        }
+    }
+
+    #[test]
+    fn dri_is_listed_in_dev_dir() {
+        let proc = crate::process::Process::new(1);
+        let entries = dir_entries(&proc, &DevfsEntry::Root);
+        let names: Vec<&[u8]> = entries.iter().map(|(n, _, _)| n.as_slice()).collect();
+        assert!(names.iter().any(|n| *n == b"dri"),
+                "dri missing from /dev listing: {:?}", names);
+        for (name, dtype, _) in entries.iter() {
+            if name == b"dri" {
+                assert_eq!(*dtype, DT_DIR);
             }
         }
     }

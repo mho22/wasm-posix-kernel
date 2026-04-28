@@ -15359,6 +15359,14 @@ mod tests {
         assert_ne!(h, VirtualDevice::Fb0.host_handle());
     }
 
+    #[test]
+    fn dri_render0_stat_is_chr() {
+        let st = virtual_device_stat(VirtualDevice::DriRender0, 0, 0);
+        assert_eq!(st.st_mode & wasm_posix_shared::mode::S_IFMT,
+                   wasm_posix_shared::mode::S_IFCHR);
+        assert_eq!(st.st_ino, VirtualDevice::DriRender0.ino());
+    }
+
     /// Mutex serializing tests that touch the global FB0_OWNER atomic.
     static FB0_OWNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
