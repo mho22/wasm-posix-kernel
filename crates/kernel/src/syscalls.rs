@@ -46,11 +46,12 @@ fn parse_ascii_usize(bytes: &[u8]) -> Option<usize> {
 /// Virtual character devices handled entirely in-kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VirtualDevice {
-    Null,     // /dev/null     host_handle = -1
-    Zero,     // /dev/zero     host_handle = -2
-    Urandom,  // /dev/urandom  host_handle = -3
-    Full,     // /dev/full     host_handle = -4
-    Fb0,      // /dev/fb0      host_handle = -5
+    Null,        // /dev/null              host_handle = -1
+    Zero,        // /dev/zero              host_handle = -2
+    Urandom,     // /dev/urandom           host_handle = -3
+    Full,        // /dev/full              host_handle = -4
+    Fb0,         // /dev/fb0               host_handle = -5
+    DriRender0,  // /dev/dri/renderD128    host_handle = -6
 }
 
 impl VirtualDevice {
@@ -62,6 +63,7 @@ impl VirtualDevice {
             VirtualDevice::Urandom => -3,
             VirtualDevice::Full => -4,
             VirtualDevice::Fb0 => -5,
+            VirtualDevice::DriRender0 => -6,
         }
     }
 
@@ -73,6 +75,7 @@ impl VirtualDevice {
             -3 => Some(VirtualDevice::Urandom),
             -4 => Some(VirtualDevice::Full),
             -5 => Some(VirtualDevice::Fb0),
+            -6 => Some(VirtualDevice::DriRender0),
             _ => None,
         }
     }
@@ -85,6 +88,7 @@ impl VirtualDevice {
             VirtualDevice::Urandom => 3,
             VirtualDevice::Full => 4,
             VirtualDevice::Fb0 => 5,
+            VirtualDevice::DriRender0 => 6,
         }
     }
 }
@@ -97,6 +101,7 @@ fn match_virtual_device(path: &[u8]) -> Option<VirtualDevice> {
         b"/dev/urandom" | b"/dev/random" => Some(VirtualDevice::Urandom),
         b"/dev/full" => Some(VirtualDevice::Full),
         b"/dev/fb0" => Some(VirtualDevice::Fb0),
+        b"/dev/dri/renderD128" => Some(VirtualDevice::DriRender0),
         _ => None,
     }
 }
@@ -960,7 +965,9 @@ pub fn sys_read(
                         // expected to mmap. Return 0 (EOF-like) rather than
                         // making up pixel bytes, matching the existing
                         // "no-op for unsupported access" pattern.
-                        VirtualDevice::Null | VirtualDevice::Fb0 => 0,
+                        VirtualDevice::Null
+                        | VirtualDevice::Fb0
+                        | VirtualDevice::DriRender0 => 0,
                         VirtualDevice::Zero | VirtualDevice::Full => {
                             for b in buf.iter_mut() { *b = 0; }
                             buf.len()
@@ -13266,6 +13273,7 @@ mod tests {
         assert_eq!(match_virtual_device(b"/dev/urandom"), Some(VirtualDevice::Urandom));
         assert_eq!(match_virtual_device(b"/dev/random"), Some(VirtualDevice::Urandom));
         assert_eq!(match_virtual_device(b"/dev/full"), Some(VirtualDevice::Full));
+        assert_eq!(match_virtual_device(b"/dev/dri/renderD128"), Some(VirtualDevice::DriRender0));
         assert_eq!(match_virtual_device(b"/dev/tty"), None);
         assert_eq!(match_virtual_device(b"/tmp/foo"), None);
     }
@@ -13285,11 +13293,18 @@ mod tests {
 
     #[test]
     fn test_virtual_device_roundtrip() {
-        for dev in [VirtualDevice::Null, VirtualDevice::Zero, VirtualDevice::Urandom, VirtualDevice::Full, VirtualDevice::Fb0] {
+        for dev in [
+            VirtualDevice::Null,
+            VirtualDevice::Zero,
+            VirtualDevice::Urandom,
+            VirtualDevice::Full,
+            VirtualDevice::Fb0,
+            VirtualDevice::DriRender0,
+        ] {
             assert_eq!(VirtualDevice::from_host_handle(dev.host_handle()), Some(dev));
         }
         assert_eq!(VirtualDevice::from_host_handle(0), None);
-        assert_eq!(VirtualDevice::from_host_handle(-6), None);
+        assert_eq!(VirtualDevice::from_host_handle(-7), None);
     }
 
     // ===== Loopback socket tests =====
@@ -15321,6 +15336,27 @@ mod tests {
         assert_eq!(st.st_mode & wasm_posix_shared::mode::S_IFMT,
                    wasm_posix_shared::mode::S_IFCHR);
         assert_eq!(st.st_ino, VirtualDevice::Fb0.ino());
+    }
+
+    #[test]
+    fn match_virtual_device_recognizes_dri_renderd128() {
+        assert_eq!(match_virtual_device(b"/dev/dri/renderD128"),
+                   Some(VirtualDevice::DriRender0));
+        // No card0 (KMS) and no other render nodes in v1.
+        assert_eq!(match_virtual_device(b"/dev/dri/card0"),       None);
+        assert_eq!(match_virtual_device(b"/dev/dri/renderD129"),  None);
+    }
+
+    #[test]
+    fn dri_render0_has_unique_host_handle_sentinel() {
+        let h = VirtualDevice::DriRender0.host_handle();
+        assert_eq!(VirtualDevice::from_host_handle(h), Some(VirtualDevice::DriRender0));
+        // Distinct from every existing virtual device.
+        assert_ne!(h, VirtualDevice::Null.host_handle());
+        assert_ne!(h, VirtualDevice::Zero.host_handle());
+        assert_ne!(h, VirtualDevice::Urandom.host_handle());
+        assert_ne!(h, VirtualDevice::Full.host_handle());
+        assert_ne!(h, VirtualDevice::Fb0.host_handle());
     }
 
     /// Mutex serializing tests that touch the global FB0_OWNER atomic.
