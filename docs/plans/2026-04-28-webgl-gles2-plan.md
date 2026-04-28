@@ -6,7 +6,7 @@
 
 **Architecture:** Pixels never go through the kernel. The cmdbuf lives inside the process's wasm `Memory` SAB (same machinery as fbdev's mmap). On `mmap` of `/dev/dri/renderD128`, the kernel allocates an anonymous region in process memory and calls `HostIO::gl_bind(pid, addr, len)`. The libGLESv2 stub appends TLV entries; `eglSwapBuffers` issues `ioctl(GLIO_SUBMIT, &si{offset,length})` which calls `HostIO::gl_submit(pid, off, len)`. Host reads `[addr+off, addr+off+len)` from the cached process Memory SAB, decodes TLVs, and dispatches each op against a `WebGL2RenderingContext` owned by `GlContextRegistry`. Companion design doc: `docs/plans/2026-04-28-webgl-gles2-design.md`.
 
-**Tech Stack:** Rust kernel (wasm64), TypeScript host (browser + Node), C user programs cross-compiled with `wasm32posix-cc`, hand-written `libEGL.a` + `libGLESv2.a` (~800 LoC total) in the sysroot, Khronos headers (`EGL/`, `GLES2/`, `GLES3/`, `KHR/`) vendored unmodified, `es2gears` from [Mesa demos](https://gitlab.freedesktop.org/mesa/demos/-/tree/main/src/egl/opengles2).
+**Tech Stack:** Rust kernel (wasm64), TypeScript host (browser + Node), C user programs cross-compiled with `wasm32posix-cc`, hand-written `libEGL.a` + `libGLESv2.a` (~800 LoC total) in the sysroot, Khronos headers (`EGL/`, `GLES2/`, `GLES3/`, `KHR/`) vendored unmodified, `es2gears` from [Mesa demos](https://gitlab.freedesktop.org/mesa/demos/-/tree/main/src/egl/opengles2) plus its `eglut` harness (`src/egl/eglut/eglut.c` + `wsi/wsi.c`) and `src/util/matrix.c`, all byte-for-byte upstream. We author one new file — `wsi/wpk.c` (~80 LoC, Task C5b) — following the same shape as the upstream `wsi/x11.c` and `wsi/wayland.c` backends.
 
 **Validation status (2026-04-28):** A throwaway OffscreenCanvas + cmdbuf spike was run before this plan was written. With 40,000 ops/frame in a recording-bridge worker, the dispatch loop sustained avg 0.70 ms / peak 1.20 ms / 1430 fps / 57.21 Mops/s — i.e. ~4% of the 60fps frame budget at 4× the design's target ops/frame. WebGL 2 inside a Web Worker via `OffscreenCanvas` is confirmed working in at least the user's default browser; cross-browser (Firefox / Safari) verification is part of Phase C, Task C8. Numbers above are not load-bearing for the plan, but they are the reason the cmdbuf design moves forward instead of being rethought.
 
@@ -43,6 +43,31 @@ bash scripts/check-abi-version.sh
 `XFAIL` / `TIME` are acceptable; `FAIL` that isn't pre-existing is a regression.
 
 **ABI impact:** Expect `ABI_VERSION` 6 → 7 in Task A9. New `repr(C)` structs (`GlSubmitInfo`, `GlContextAttrs`, `GlSurfaceAttrs`, `GlQueryInfo`), new `host_gl_*` host imports, new `OP_VERSION` constant for the GLES op-table independently of overall ABI.
+
+---
+
+## Pre-implementation review (2026-04-28)
+
+Before kernel work began, a devil's-advocate pass cross-referenced the plan against the actual `es2gears` source and Mesa's `eglut` harness, and audited the cmdbuf format against es2gears's per-op data sizes. Findings, applied to this plan in the same commit:
+
+1. **`es2gears.c` does not call EGL directly** — it uses Mesa's `eglut` harness (`src/egl/eglut/eglut.c`), which has WSI backends (`wsi/x11.c`, `wsi/wayland.c`). The original Task C6 build script compiled only `es2gears.c` and would have failed to link. Resolution:
+   - **New Task C5b** authors `wsi/wpk.c` (~80 LoC, follows the same shape as the existing X11 / Wayland backends, sets `_eglut->surface_type = EGL_WINDOW_BIT` and `win->native.u.window = (EGLNativeWindowType)EGL_WPK_SURFACE_DEFAULT`). This is *the* idiomatic way eglut is extended to a new platform — it is **not** a platform-gap patch, and `es2gears.c` + `eglut.c` top-level remain byte-for-byte upstream.
+   - **Task C6 build script** rewritten to compile `es2gears.c` + `eglut.c` + `wsi/wsi.c` + `wsi/wpk.c` + `src/util/matrix.c`.
+   - **Task C6 Step 3 "gotchas"** dropped the misleading "switch to pbuffer if non-X variant" suggestion (eglut is the right layer).
+
+2. **GL surface-coverage audit** — `nm`-equivalent on `es2gears.c` produced 24 distinct `gl*` entry points. Cross-checked against the plan's `OP_*` table:
+   - 23 of 24 covered.
+   - **Missing: `glUniform4fv`** (array form). The plan had `OP_UNIFORM4F` (scalar 4-arg) but es2gears uses `glUniform4fv(LightSourcePosition_location, 1, LightSourcePosition)`. Without this op the gears would render unlit (lighting uniform never sets). Resolution: **`OP_UNIFORM4FV: u16 = 0x0406` added to Task A1's `gl` module + opcode-uniqueness test.**
+
+3. **`eglBindAPI` missing from libEGL stub** — `eglut.c:140` calls it before `eglCreateContext`. Resolution: stub added to Task C2's listing (no-op returning `EGL_TRUE`).
+
+4. **Cmdbuf u16 envelope cap is fine for v1, becomes a wall in v2** — the TLV layout is `{u16 op, u16 payload_len, payload}`, capping any single op at 65 535 bytes. Largest es2gears op (`glBufferData` for the 20-tooth gear) = 958 vertices × 24 bytes = **~23 KB**, comfortably under the cap. No textures. **For es2gears v1 this is fine.** For any v2 demo with textures > 64 KB (which is most of them — a 256×256 RGBA texture is 256 KB), `OP_TEX_IMAGE_2D` would not fit. Recorded as an explicit v1 constraint in "Trade-offs already locked in" + risk register; v2 widens the envelope to `u32` (which is itself an ABI break, future plan responsibility).
+
+5. **`OP_VERSION` vs. `ABI_VERSION` divergence rule is implicit but coherent** — opcode-set additions (no struct shape change) bump `OP_VERSION` only; struct layout / syscall number / channel / asyncify changes bump `ABI_VERSION`. This is what risk-register row 2 already does. No edit needed; flagged here so reviewers don't re-litigate.
+
+6. **GLES 2 vs WebGL 2 / GLES 3 mix is intentional** — `libGLESv2.a` ships both ES 2 and ES 3 entry points (mirrors how Linux does it: one `libGLESv2.so` covers both). Programs select via `EGL_CONTEXT_CLIENT_VERSION`. The opcode table mixes families on purpose; that is correct.
+
+These findings are recorded so a fresh session can pick up the current plan as-of, without re-deriving the audit.
 
 ---
 
@@ -142,6 +167,10 @@ pub mod gl {
     pub const OP_UNIFORM3F:                   u16 = 0x0403;
     pub const OP_UNIFORM4F:                   u16 = 0x0404;
     pub const OP_UNIFORM_MATRIX4FV:           u16 = 0x0405;
+    /// `glUniform4fv(location, count, value)` — vector form. es2gears uses
+    /// this for the directional light position. `OP_UNIFORM4F` (scalar) is a
+    /// different signature; both are needed.
+    pub const OP_UNIFORM4FV:                  u16 = 0x0406;
 
     pub const OP_ENABLE_VERTEX_ATTRIB_ARRAY:  u16 = 0x0500;
     pub const OP_DISABLE_VERTEX_ATTRIB_ARRAY: u16 = 0x0501;
@@ -280,7 +309,7 @@ mod gl_tests {
             OP_LINK_PROGRAM, OP_USE_PROGRAM, OP_BIND_ATTRIB_LOCATION,
             OP_DELETE_PROGRAM,
             OP_UNIFORM1I, OP_UNIFORM1F, OP_UNIFORM2F, OP_UNIFORM3F,
-            OP_UNIFORM4F, OP_UNIFORM_MATRIX4FV,
+            OP_UNIFORM4F, OP_UNIFORM4FV, OP_UNIFORM_MATRIX4FV,
             OP_ENABLE_VERTEX_ATTRIB_ARRAY, OP_DISABLE_VERTEX_ATTRIB_ARRAY,
             OP_VERTEX_ATTRIB_POINTER, OP_DRAW_ARRAYS, OP_DRAW_ELEMENTS,
             OP_GEN_VERTEX_ARRAYS, OP_DELETE_VERTEX_ARRAYS, OP_BIND_VERTEX_ARRAY,
@@ -2313,6 +2342,12 @@ EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface sfc) {
 
 EGLBoolean eglWaitGL(void)   { gles_flush(); return EGL_TRUE; }
 EGLBoolean eglSwapInterval(EGLDisplay dpy, EGLint interval) { (void)dpy; (void)interval; return EGL_TRUE; }
+
+// eglut calls eglBindAPI(EGL_OPENGL_ES_API) before eglCreateContext. v1
+// only supports GLES, so this is a no-op that always succeeds. (Real EGL
+// would track the bound API and reject GLES context creation under
+// EGL_OPENGL_API; we don't need that distinction yet.)
+EGLBoolean eglBindAPI(EGLenum api) { (void)api; return EGL_TRUE; }
 ```
 
 **Step 2: Static archive build**
@@ -2655,11 +2690,165 @@ git commit -m "examples(gldemo): build gltri/glopen-only/gloverflow + enable B5 
 
 ---
 
+### Task C5b: `eglut` WPK backend (`wsi/wpk.c`)
+
+`es2gears.c` does not call EGL directly — it uses Mesa's `eglut` harness, which in turn delegates to a WSI backend (`wsi/x11.c` or `wsi/wayland.c` upstream). The clean way to ship es2gears unmodified is to author a third backend, `wsi/wpk.c`, alongside the existing two. This is the same extension pattern Mesa uses; it does **not** count as a platform-gap patch and `eglut.c` itself stays byte-for-byte upstream.
+
+**Files:**
+- Create: `examples/libs/es2gears/wpk-backend/wsi/wpk.c` (~80 LoC, structurally mirrors the existing `wsi/x11.c` — see `/tmp/mesa-demos-check/src/egl/eglut/wsi/x11.c` for the reference shape).
+- The cross-compile in Task C6 builds this file together with the upstream `eglut.c` + `wsi/wsi.c`.
+
+**Reference: what eglut expects from a backend (from `eglut.c`)**
+
+```c
+// eglut.c calls these symbols from the backend:
+void _eglutNativeInitDisplay(void);   // sets _eglut->native_dpy + ->surface_type
+void _eglutNativeFiniDisplay(void);
+void _eglutNativeInitWindow(struct eglut_window *win, const char *title,
+                            int x, int y, int w, int h);
+void _eglutNativeFiniWindow(struct eglut_window *win);
+void _eglutNativeEventLoop(void);
+```
+
+**Step 1: Implement the WPK backend**
+
+```c
+// examples/libs/es2gears/wpk-backend/wsi/wpk.c
+//
+// eglut WSI backend for wasm-posix-kernel. Mirrors wsi/x11.c shape;
+// no native window system — every window maps to "the default canvas"
+// via the EGL_WPK_SURFACE_DEFAULT sentinel that our libEGL recognizes.
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <termios.h>
+#include <EGL/egl.h>
+
+#include "eglutint.h"
+#include "wsi.h"
+
+// The same magic value that libegl_stub.c (Task C2) recognizes as
+// "the bound canvas." Defined in <EGL/eglext.h> in our overlay; for
+// compilation independence we redeclare it here.
+#ifndef EGL_WPK_SURFACE_DEFAULT
+#define EGL_WPK_SURFACE_DEFAULT ((void*)(intptr_t)0xDEFA017)
+#endif
+
+static struct termios saved_termios;
+static int termios_saved = 0;
+
+static void
+init_display(void)
+{
+   // No native display — eglGetDisplay(EGL_DEFAULT_DISPLAY) is what opens
+   // /dev/dri/renderD128 inside libEGL.
+   _eglut->native_dpy = EGL_DEFAULT_DISPLAY;
+   _eglut->surface_type = EGL_WINDOW_BIT;
+}
+
+static void
+fini_display(void)
+{
+   _eglut->native_dpy = NULL;
+}
+
+static void
+init_window(struct eglut_window *win, const char *title,
+            int x, int y, int w, int h)
+{
+   (void)title; (void)x; (void)y;
+
+   // Hand the libEGL stub our magic sentinel; everything downstream
+   // (eglCreateWindowSurface) expects to recognize it.
+   win->native.u.window = (EGLNativeWindowType)EGL_WPK_SURFACE_DEFAULT;
+   win->native.width = w;
+   win->native.height = h;
+}
+
+static void
+fini_window(struct eglut_window *win)
+{
+   (void)win;
+}
+
+// Put stdin into raw mode so single-key reads work the same way
+// fbDOOM's keyboard input does.
+static void
+raw_termios_install(void)
+{
+   struct termios t;
+   if (tcgetattr(0, &saved_termios) == 0) {
+      t = saved_termios;
+      t.c_lflag &= ~(ICANON | ECHO);
+      t.c_cc[VMIN] = 0;
+      t.c_cc[VTIME] = 0;
+      if (tcsetattr(0, TCSANOW, &t) == 0) termios_saved = 1;
+   }
+}
+
+static void
+raw_termios_restore(void)
+{
+   if (termios_saved) tcsetattr(0, TCSANOW, &saved_termios);
+}
+
+static void
+event_loop(void)
+{
+   // Trivial loop: pump idle + display callbacks. The kernel host's
+   // RAF loop is what actually paces us — eglSwapBuffers blocks on
+   // GLIO_PRESENT until the host is ready for the next frame.
+   raw_termios_install();
+   atexit(raw_termios_restore);
+
+   while (!_eglut->redisplay) {
+      char buf[8];
+      int n = read(0, buf, sizeof buf);
+      if (n > 0 && _eglut->current && _eglut->current->keyboard_cb) {
+         for (int i = 0; i < n; i++)
+            _eglut->current->keyboard_cb(buf[i]);
+      }
+      if (_eglut->idle_cb) _eglut->idle_cb();
+      if (_eglut->current && _eglut->current->display_cb)
+         _eglut->current->display_cb();
+   }
+}
+```
+
+(The exact eglut internals — `_eglut->current`, `_eglut->idle_cb`, `_eglut->redisplay`, the `keyboard_cb` / `display_cb` pointers, the `EGLUT_KEY_*` codes for arrow keys — should be lifted from `eglutint.h` at port time. Cross-check against the cloned mesa-demos repo before committing.)
+
+**Step 2: Validate the backend compiles standalone**
+
+A standalone compile against the headers (no link yet) catches missing includes early:
+
+```bash
+wasm32posix-cc -c \
+  -I"$REPO_ROOT/examples/libs/es2gears/mesa-demos-src/src/egl/eglut" \
+  -I"$REPO_ROOT/musl-overlay/include" \
+  examples/libs/es2gears/wpk-backend/wsi/wpk.c \
+  -o /tmp/wpk-backend.o
+```
+
+Expected: clean compile.
+
+**Step 3: Commit**
+
+```bash
+git add examples/libs/es2gears/wpk-backend/
+git commit -m "examples(gldemo): eglut WSI backend for wpk (wsi/wpk.c)"
+```
+
+---
+
 ### Task C6: `examples/libs/es2gears/build-es2gears.sh`
 
 **Files:**
 - Create: `examples/libs/es2gears/build-es2gears.sh`
 - Possibly: `examples/libs/es2gears/patches/*.patch` — only for cross-compile hygiene.
+
+`es2gears.c` itself is just the demo body; the EGL boilerplate lives in `eglut.c` + a WSI backend (`wsi/x11.c`, `wsi/wayland.c`, plus our new `wsi/wpk.c` from Task C5b). The build links them all together. Both `eglut.c` and `es2gears.c` are byte-for-byte upstream — no platform-gap patches.
 
 **Step 1: Build script**
 
@@ -2684,12 +2873,24 @@ for p in "$HERE"/patches/*.patch; do
   [ -f "$p" ] && (cd "$SRC" && patch -p1 --batch --forward < "$p" || true)
 done
 
-# Cross-compile the single C file directly — bypass the upstream Makefile
-# tangle, which assumes pkg-config / autoconf / X11.
+# es2gears depends on eglut + a WSI backend + matrix.c. We link the
+# upstream eglut + wsi/wsi.c + util/matrix.c byte-for-byte, plus our
+# own wsi/wpk.c (Task C5b) as the platform backend. No upstream files
+# are modified.
+EGLUT_DIR="$SRC/src/egl/eglut"
+UTIL_DIR="$SRC/src/util"
+WPK_BACKEND="$HERE/wpk-backend/wsi/wpk.c"
+
 wasm32posix-cc \
   -Os -DEGL_DEFAULT_DISPLAY=0 \
   -I"$REPO_ROOT/musl-overlay/include" \
+  -I"$EGLUT_DIR" \
+  -I"$UTIL_DIR" \
   "$SRC/src/egl/opengles2/es2gears.c" \
+  "$EGLUT_DIR/eglut.c" \
+  "$EGLUT_DIR/wsi/wsi.c" \
+  "$WPK_BACKEND" \
+  "$UTIL_DIR/matrix.c" \
   -lEGL -lGLESv2 -lm \
   -o "$OUT"
 
@@ -2706,7 +2907,7 @@ bash examples/libs/es2gears/build-es2gears.sh
 ls -la examples/browser/public/assets/gldemo/es2gears.wasm
 ```
 
-Expected: ~50–100 KiB wasm.
+Expected: ~80–150 KiB wasm (slightly larger than the original "single-file" estimate because eglut + matrix are now included).
 
 **Step 3: Likely gotchas**
 
@@ -2714,8 +2915,10 @@ Apply patches as needed for these (in increasing order of likelihood):
 
 - `eglGetPlatformDisplay`: the upstream variant some demos use. If unresolved, patch `eglGetPlatformDisplay(...)` → `eglGetDisplay(EGL_DEFAULT_DISPLAY)`. This is a *cross-compilation hygiene* patch, not a platform-gap workaround.
 - Stray `<GL/gl.h>` includes: patch out.
-- `eglCreateWindowSurface` with X11 native window: switch to `eglCreatePbufferSurface` if the demo offers a non-X variant; otherwise pass `EGL_WPK_SURFACE_DEFAULT` if the demo accepts an `EGLNativeWindowType` argument we control.
+- `eglut.c` references X11 / Wayland headers under `#ifdef`: should be guarded by `HAVE_X11` / `HAVE_WAYLAND` and not built into the wpk binary. If they leak in, add `-DHAVE_NONE_OF_THE_ABOVE` or whatever the existing convention is.
 - `gettimeofday` and `usleep`: already implemented.
+
+Surface-creation does **not** belong on this list — it is handled at the eglut WSI layer (Task C5b's `wsi/wpk.c` writes the `EGL_WPK_SURFACE_DEFAULT` sentinel into `win->native.u.window`, and the libEGL stub from Task C2 recognizes it). Do **not** patch `eglCreateWindowSurface` calls in `es2gears.c` or `eglut.c`.
 
 **Step 4: Commit**
 
@@ -2943,11 +3146,13 @@ Total: ~1900 LoC of new code (excluding vendored Khronos headers) across three P
 These were chosen in the design RFC (`docs/plans/2026-04-28-webgl-gles2-design.md` §2 + §5) and pinned by the spike result. Implementation should follow them; if a counter-argument surfaces, raise it as a comment on the relevant PR rather than silently changing course:
 
 - **Cmdbuf TLV format** beats one-syscall-per-call (perf) and beats `eval`-of-JS-string (CSP).
+- **TLV envelope is `{u16 op, u16 payload_len, payload}`** — single-op payload capped at 65 535 bytes in v1. Sufficient for `es2gears` (largest op ~23 KB). Any v2 demo with a >64 KB texture upload (e.g. `glTexImage2D` for a 256² RGBA image = 256 KB) will not fit; v2 widens to `u32 payload_len` and bumps `ABI_VERSION`. Do **not** silently widen during v1 implementation — it's an ABI break and requires its own design pass.
 - **Render node**, not `/dev/fb0` reuse (semantic correctness + read-back cost).
 - **Single context, single owner, single canvas** in v1 (parallels `FB0_OWNER` posture).
 - **Hand-written stub, no generator** in v1 (~80-LoC `gl_emit()` is the smallest viable shape; generator deferred to v2 per design §9).
 - **OffscreenCanvas in the kernel worker** as the default; main-thread fallback is supported but second-class.
 - **Khronos headers vendored unmodified** (no fork; they're stable API headers).
+- **`es2gears` ships unmodified** — the EGL surface boilerplate lives in Mesa's `eglut` harness (`eglut.c` + `wsi/<backend>.c`). We add a new backend `wsi/wpk.c` (Task C5b) following the same pattern as the upstream X11 / Wayland backends. `eglut.c` itself is also byte-for-byte upstream. No patches to demo or harness.
 - **`gltri.c` is the structural test guard, not a Playwright pixel snapshot** (rotation makes snapshots brittle).
 
 ## Risk register
@@ -2959,6 +3164,7 @@ Issues that could derail the stack mid-implementation, with the planned response
 | Safari OffscreenCanvas + WebGL2 incompatibility | Task C8 cross-browser pass | Promote main-thread fallback (Task B4) to first-class; add capability detect in `attachGlCanvas`. |
 | `es2gears` upstream uses something not in our op set | Task C6 build / Task C8 verify | Add the missing op to `shared::gl::OP_*` + bridge.ts + libGLESv2 stub; bump `OP_VERSION` (no `ABI_VERSION` bump unless a struct changes). |
 | Cmdbuf overflow at 1 MiB on a heavy demo | Vitest cmdbuf-overflow test in B5 + manual gldemo run | Auto-flush already in `gl_emit`; if perf shows multi-flush per frame, raise `CMDBUF_LEN` (note: ABI snapshot tracks the constant — bump if changed). |
+| Single op > 64 KB (TLV envelope cap, v1) | libGLESv2 stub `assert(len <= UINT16_MAX)` at gl_emit time; would also surface as a host decoder error | Affects any demo doing big texture uploads or large `glBufferData`. Out of scope for v1 (`es2gears` doesn't trigger). For v2: widen to `u32 payload_len`, bump `ABI_VERSION` and `OP_VERSION`. Do not silently widen mid-implementation. |
 | Sync query latency dominates on `glGetError`-spammy demos | Manual gldemo with FPS readout | Document; advise patching the demo to not call `glGetError` per call (per the design doc trade-off note). Don't add a JS-side fast-path cache in v1. |
 | `wasm32posix-cc` auto-link breaks an existing program that explicitly links `-lEGL` | Existing test gauntlet | The auto-link logic must be additive only (skip when already in the linker invocation). Verify on existing programs in `programs/`. |
 | ABI snapshot diff is larger than expected (e.g. tracks tagged-union variants) | Task A9 diff inspection | Either accept and bump `ABI_VERSION` regardless, or refine `scripts/check-abi-version.sh` filters — discuss with user before changing the script. |
