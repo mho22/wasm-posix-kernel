@@ -1,0 +1,41 @@
+# Per-library manifest for freetype. See docs/package-management.md.
+#
+# Freetype provides scalable font rendering. It depends on zlib (compressed
+# font tables) and libpng (PNG-color glyph support, e.g. emoji). bzip2,
+# brotli, and harfbuzz are upstream-optional and explicitly disabled in the
+# build script — wasm32 sysroot ships none of them and harfbuzz would be a
+# circular dep.
+#
+# First consumer: ScummVM (in-engine GUI text rendering).
+
+kind = "library"
+
+name = "freetype"
+version = "2.13.2"
+revision = 1
+depends_on = ["zlib@1.3.1", "libpng@1.6.43"]
+
+[source]
+url = "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.2.tar.xz"
+sha256 = "12991c4e55c506dd7f9b765933e62fd2be2e06d421505d7950a132e4f1bb484d"
+
+[license]
+# Freetype is dual-licensed: applications may pick either FTL (BSD-like)
+# or GPL-2.0. We declare both so the SBOM step can choose appropriately
+# per consumer.
+spdx = "FTL OR GPL-2.0-only"
+url = "https://gitlab.freedesktop.org/freetype/freetype/-/raw/master/LICENSE.TXT"
+
+[outputs]
+# Upstream installs libfreetype.a directly (no version suffix). Headers
+# live under include/freetype2/ ; consumers add `-I.../include/freetype2`
+# (the freetype2.pc pkg-config file does this for them).
+libs = ["lib/libfreetype.a"]
+headers = ["include/freetype2"]
+pkgconfig = ["lib/pkgconfig/freetype2.pc"]
+
+# Binary archive is published after first successful build + verification.
+# Until then the resolver builds from source on demand.
+# [binary.wasm32]
+# archive_url = "https://github.com/mho22/wasm-posix-kernel/releases/download/binaries-abi-v6-2026-XX-XX/freetype-2.13.2-rev1-abi6-wasm32-*.tar.zst"
+# archive_sha256 = "<filled at publish>"
