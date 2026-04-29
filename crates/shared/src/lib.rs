@@ -961,6 +961,15 @@ pub mod abi {
         "__wasm_init_",
         "__wasm_apply_",
         "__llvm_",
+        // LLD/wasm-ld emits __tls_align / __tls_base / __tls_size as a
+        // side-effect of TLS-aware codegen. Whether they appear depends
+        // on the toolchain version (newer nightlies optimise them away
+        // when no kernel-internal code references them externally), and
+        // nothing in the host runtime reads them from the kernel module
+        // (host/src/worker-main.ts reads __tls_base only from user-program
+        // instances). Filtering them keeps the snapshot stable across
+        // toolchain churn.
+        "__tls_",
     ];
 
     /// Exact-name variant of [`EXPORT_DENY_PREFIXES`] — exports we

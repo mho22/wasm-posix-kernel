@@ -202,8 +202,7 @@ need_kernel() {
         step "Building kernel"
         cd "$REPO_ROOT"
         cargo build --release -p wasm-posix-kernel \
-            -Z build-std=core,alloc \
-            -Z build-std-features=panic_immediate_abort
+            -Z build-std=core,alloc
         # Mirror what build.sh does: copy to local-binaries/ (the
         # canonical override tree the binary-resolver checks). The
         # host/wasm/ copy is preserved as a legacy fallback for older
