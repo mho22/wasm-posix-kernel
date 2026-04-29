@@ -107,8 +107,36 @@ for src in "$REPO_ROOT/programs/"*.c; do
     [ "$(basename "$src")" = "sh.c" ] && continue
     # Skip hello64.c — built separately with wasm64 toolchain below
     [ "$(basename "$src")" = "hello64.c" ] && continue
+    # Skip sdl2-* — they need libSDL2.a and a different link line.
+    case "$(basename "$src")" in sdl2-*) continue;; esac
     build_program "$src" "$OUT_DIR_32"
 done
+
+# SDL2-dependent test programs. Only built when libSDL2.a has been
+# installed by examples/libs/sdl2/build-sdl2.sh; otherwise skipped so
+# the rest of build-programs.sh stays green for CI / fresh checkouts.
+SDL2_LIB="$REPO_ROOT/local-binaries/lib/libSDL2.a"
+SDL2_INCLUDE="$REPO_ROOT/local-binaries/include/SDL2"
+if [ -f "$SDL2_LIB" ] && [ -d "$SDL2_INCLUDE" ]; then
+    echo "Building SDL2 test programs..."
+    for src in "$REPO_ROOT/programs/"sdl2-*.c; do
+        [ -f "$src" ] || continue
+        name=$(basename "$src" .c)
+        wasm="$OUT_DIR_32/${name}.wasm"
+        echo "  Compiling $name..."
+        "$CC" "${CFLAGS[@]}" \
+            -I"$SDL2_INCLUDE" \
+            "$src" \
+            "${LINK_FLAGS[@]}" \
+            "$SDL2_LIB" \
+            -o "$wasm"
+        if [ -n "$WASM_OPT" ]; then
+            "$WASM_OPT" --asyncify \
+                --pass-arg="asyncify-imports@${ASYNCIFY_IMPORTS}" \
+                "$wasm" -o "$wasm" 2>/dev/null || true
+        fi
+    done
+fi
 
 echo "Building example programs..."
 for src in "$REPO_ROOT/examples/"*.c; do
