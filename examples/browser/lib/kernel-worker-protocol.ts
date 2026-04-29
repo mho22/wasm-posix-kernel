@@ -182,6 +182,20 @@ export interface RegisterLazyFilesMessage {
   entries: Array<{ ino: number; path: string; url: string; size: number }>;
 }
 
+/**
+ * Main-thread → kernel-worker mouse injection. The main thread captures
+ * canvas mouse events and forwards them here; the worker calls
+ * `CentralizedKernelWorker.injectMouseEvent` which appends a 3-byte PS/2
+ * frame to the kernel queue and wakes any blocked reader of
+ * `/dev/input/mice`.
+ */
+export interface MouseInjectMessage {
+  type: "mouse_inject";
+  dx: number;
+  dy: number;
+  buttons: number;
+}
+
 export interface RegisterLazyArchivesMessage {
   type: "register_lazy_archives";
   entries: Array<{
@@ -231,7 +245,8 @@ export type MainToKernelMessage =
   | RegisterPtyOutputMessage
   | RegisterLazyFilesMessage
   | RegisterLazyArchivesMessage
-  | GetForkCountRequestMessage;
+  | GetForkCountRequestMessage
+  | MouseInjectMessage;
 
 // ── Kernel Worker → Main Thread ──
 

@@ -572,6 +572,16 @@ export class BrowserKernel {
     }) as Promise<boolean>;
   }
 
+  /**
+   * Push a mouse event into the kernel's `/dev/input/mice` queue. Pass
+   * deltas in PS/2 sign convention (positive-right, positive-up — invert
+   * the browser's deltaY before calling) and a button bitmask
+   * (bit0=left, bit1=right, bit2=middle).
+   */
+  injectMouseEvent(dx: number, dy: number, buttons: number): void {
+    this.sendToKernel({ type: "mouse_inject", dx, dy, buttons });
+  }
+
   // ── PTY methods ──
 
   /** Write data to the PTY master for a process. */

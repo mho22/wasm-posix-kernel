@@ -167,11 +167,52 @@ startBtn.addEventListener("click", async () => {
       if (code !== undefined) sendScancode(code, false);
     }
     heldKeys.clear();
+    if (mouseButtons !== 0) {
+      mouseButtons = 0;
+      kernel.injectMouseEvent(0, 0, 0);
+    }
   });
-  canvas.addEventListener("click", () => canvas.focus());
+
+  // Mouse input → /dev/input/mice PS/2 packets. We use Pointer Lock so the
+  // browser delivers unbounded relative motion (movementX/Y) instead of
+  // clamped clientX/Y, matching what a real mouse delivers over PS/2.
+  // Browser MouseEvent.button: 0=L, 1=M, 2=R. PS/2 byte0 button bits:
+  // bit0=L, bit1=R, bit2=M. Browser deltaY is positive-down — invert
+  // before sending so the kernel queue holds PS/2 (positive-up) deltas.
+  let mouseButtons = 0;
+  const buttonBit = (b: number) => (b === 0 ? 1 : b === 2 ? 2 : b === 1 ? 4 : 0);
+  canvas.addEventListener("click", () => {
+    canvas.focus();
+    if (document.pointerLockElement !== canvas) {
+      canvas.requestPointerLock();
+    }
+  });
+  canvas.addEventListener("mousemove", (e) => {
+    if (document.pointerLockElement !== canvas) return;
+    const dx = e.movementX | 0;
+    const dy = -(e.movementY | 0);
+    if (dx === 0 && dy === 0) return;
+    kernel.injectMouseEvent(dx, dy, mouseButtons);
+  });
+  canvas.addEventListener("mousedown", (e) => {
+    if (document.pointerLockElement !== canvas) return;
+    const bit = buttonBit(e.button);
+    if (bit === 0) return;
+    e.preventDefault();
+    mouseButtons |= bit;
+    kernel.injectMouseEvent(0, 0, mouseButtons);
+  });
+  canvas.addEventListener("mouseup", (e) => {
+    const bit = buttonBit(e.button);
+    if (bit === 0) return;
+    e.preventDefault();
+    mouseButtons &= ~bit;
+    kernel.injectMouseEvent(0, 0, mouseButtons);
+  });
+  canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
   statusEl.textContent =
-    "Running. Click the canvas to capture keyboard. Arrows + Enter / Esc / Ctrl / Space.";
+    "Running. Click the canvas to capture keyboard + mouse. Esc to release pointer.";
 
   exitPromise
     .then((status) => {
