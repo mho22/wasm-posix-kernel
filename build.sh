@@ -3,8 +3,7 @@ set -euo pipefail
 
 echo "Building Rust Wasm kernel (wasm64)..."
 cargo build --release -p wasm-posix-kernel \
-  -Z build-std=core,alloc \
-  -Z build-std-features=panic_immediate_abort
+  -Z build-std=core,alloc
 
 echo "Copying Wasm artifacts..."
 mkdir -p host/wasm
