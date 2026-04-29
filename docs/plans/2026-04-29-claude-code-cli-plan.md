@@ -69,8 +69,20 @@ when satisfied; we never merge upstream ourselves.
 
 ## Phase A — OpenSSL 3.x library port (PR #1)
 
+> **Discovery on first inspection (2026-04-29):** OpenSSL 3.3.2 is
+> **already** in tree at `examples/libs/openssl/` — manifest, build
+> script, smoke C test (`ssl_basic.c`), HTTPS GET test (`https_get.c`),
+> and a `binaries-abi-v6` release archive at
+> `https://github.com/brandonpayton/wasm-posix-kernel/releases/download/binaries-abi-v6/openssl-3.3.2-rev1-abi6-wasm32-07647f0c.tar.zst`.
+> `curl.wasm` 8.11.1 is also shipped, which means **real HTTPS through
+> the kernel already works end-to-end**. Phase A reduces from "build
+> OpenSSL" to "validate the existing build is still usable for the TLS
+> bridge in Phase C, run the gauntlet, document." The original task
+> spec below is preserved for archival reasons; tasks A1/A2 collapse to
+> a no-op gauntlet pass.
+
 The TLS + crypto bridges in Phases B/C link against `libssl.a` and
-`libcrypto.a`. Land those first.
+`libcrypto.a`. Both are already built and shipped.
 
 ### Task A1: Vendor OpenSSL source
 
