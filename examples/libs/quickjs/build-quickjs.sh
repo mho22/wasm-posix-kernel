@@ -93,7 +93,6 @@ if [ ! -f "$QJSC" ]; then
     $HOST_CC $HOST_CFLAGS -c "$SRC_DIR/libunicode.c" -o "$HOST_BUILD_DIR/libunicode.o"
     $HOST_CC $HOST_CFLAGS -c "$SRC_DIR/quickjs-libc.c" -o "$HOST_BUILD_DIR/quickjs-libc.o"
     $HOST_CC $HOST_CFLAGS -c "$SRC_DIR/qjsc.c" -o "$HOST_BUILD_DIR/qjsc.o"
-    $HOST_CC $HOST_CFLAGS -c "$SRC_DIR/cutils.c" -o "$HOST_BUILD_DIR/cutils.o"
     $HOST_CC $HOST_CFLAGS -c "$SRC_DIR/unicode_gen_def.c" -o "$HOST_BUILD_DIR/unicode_gen_def.o" 2>/dev/null || true
     $HOST_CC \
         "$HOST_BUILD_DIR/qjsc.o" \
@@ -102,7 +101,6 @@ if [ ! -f "$QJSC" ]; then
         "$HOST_BUILD_DIR/libregexp.o" \
         "$HOST_BUILD_DIR/libunicode.o" \
         "$HOST_BUILD_DIR/quickjs-libc.o" \
-        "$HOST_BUILD_DIR/cutils.o" \
         -lm -lpthread \
         -o "$QJSC"
     echo "Host qjsc built: $QJSC"
