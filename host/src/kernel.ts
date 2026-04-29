@@ -141,6 +141,21 @@ export class WasmPosixKernel {
     this.callbacks = callbacks ?? {};
   }
 
+  /**
+   * Push one PS/2 mouse packet into the kernel's `/dev/input/mice`
+   * queue. Silently dropped if the kernel module hasn't been
+   * instantiated yet — a canvas can fire `mousemove` before the program
+   * registers the device. `dy` is in PS/2 sense (positive-up); the
+   * caller must invert browser deltaY before calling.
+   */
+  injectMouseEvent(dx: number, dy: number, buttons: number): void {
+    const inject = this.instance?.exports?.kernel_inject_mouse_event as
+      | ((dx: number, dy: number, buttons: number) => void)
+      | undefined;
+    if (!inject) return;
+    inject(dx, dy, buttons);
+  }
+
   registerSharedPipe(handle: number, sab: SharedArrayBuffer, end: "read" | "write"): void {
     this.sharedPipes.set(handle, { pipe: SharedPipeBuffer.fromSharedBuffer(sab), end });
   }
