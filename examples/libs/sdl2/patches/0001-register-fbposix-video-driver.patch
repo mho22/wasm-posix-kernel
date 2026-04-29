@@ -1,0 +1,61 @@
+From: wasm-posix-kernel <noreply@example.invalid>
+Subject: [PATCH] Register fbposix video driver in SDL2 bootstrap + configure
+
+Adds two registration sites for our custom in-tree video driver under
+src/video/fbposix/. The driver source itself ships separately and is
+copied into src/video/fbposix/ by build-sdl2.sh before configure runs.
+
+This patch only adds — never modifies — upstream SDL2 code, and is
+gated on --enable-video-fbposix which is off by default.
+---
+ configure.ac      | 18 ++++++++++++++++++
+ src/video/SDL_video.c |  3 +++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/src/video/SDL_video.c b/src/video/SDL_video.c
+--- a/src/video/SDL_video.c
++++ b/src/video/SDL_video.c
+@@ -75,6 +75,9 @@ static VideoBootStrap *bootstrap[] = {
+ #if SDL_VIDEO_DRIVER_OFFSCREEN
+     &OFFSCREEN_bootstrap,
+ #endif
++#if SDL_VIDEO_DRIVER_FBPOSIX
++    &FBPOSIX_bootstrap,
++#endif
+ #if SDL_VIDEO_DRIVER_DUMMY
+     &DUMMY_bootstrap,
+ #endif
+diff --git a/configure.ac b/configure.ac
+--- a/configure.ac
++++ b/configure.ac
+@@ -3340,6 +3340,23 @@ CheckOffscreenVideo()
+     fi
+ }
+
++dnl Check for the fbposix video driver (wasm-posix-kernel /dev/fb0)
++CheckFBPosixVideo()
++{
++    AC_ARG_ENABLE(video-fbposix,
++AS_HELP_STRING([--enable-video-fbposix], [enable fbposix /dev/fb0 video driver [[default=no]]]),
++                  , enable_video_fbposix=no)
++    if test x$enable_video_fbposix = xyes; then
++        AC_DEFINE(SDL_VIDEO_DRIVER_FBPOSIX, 1, [ ])
++        SOURCES="$SOURCES $srcdir/src/video/fbposix/*.c"
++        have_video=yes
++        SUMMARY_video="${SUMMARY_video} fbposix"
++    fi
++    AC_MSG_CHECKING(for fbposix video driver)
++    AC_MSG_RESULT($enable_video_fbposix)
++}
++
+ dnl Find the GUI libraries
+ case "$host" in
+     *-*-cygwin* | *-*-mingw32* | *-*-msys)
+@@ -3485,6 +3502,7 @@ case "$host" in
+         CheckEGL
+         CheckOpenGLES
+         CheckOpenGL
++        CheckFBPosixVideo
+         CheckRPI
+         CheckOSS
+         CheckALSA

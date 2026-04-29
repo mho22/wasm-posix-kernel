@@ -1,0 +1,4 @@
+SDL-*/
+build/
+install/
+*.log
