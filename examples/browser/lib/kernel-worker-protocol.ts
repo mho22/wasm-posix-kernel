@@ -161,6 +161,20 @@ export interface MouseInjectMessage {
   buttons: number;
 }
 
+/**
+ * Main-thread → kernel-worker audio drain request. The main thread's
+ * AudioContext scheduler ticks every ~50 ms, asks the kernel ring for
+ * up to `maxBytes` of PCM samples, and feeds them to a chained
+ * `AudioBufferSourceNode`. The worker responds with the bytes plus the
+ * configured (rate, channels) so the main thread can size its
+ * AudioBuffer correctly.
+ */
+export interface AudioDrainMessage {
+  type: "audio_drain";
+  requestId: number;
+  maxBytes: number;
+}
+
 export interface RegisterLazyArchivesMessage {
   type: "register_lazy_archives";
   entries: Array<{
@@ -199,7 +213,8 @@ export type MainToKernelMessage =
   | RegisterPtyOutputMessage
   | RegisterLazyFilesMessage
   | RegisterLazyArchivesMessage
-  | MouseInjectMessage;
+  | MouseInjectMessage
+  | AudioDrainMessage;
 
 // ── Kernel Worker → Main Thread ──
 
