@@ -24,6 +24,12 @@ extern const uint32_t qjsc_bootstrap_size;
 extern const uint8_t qjsc_repl[];
 extern const uint32_t qjsc_repl_size;
 
+/* Native bridges (Phase B/C of the Claude Code port). Each links a
+ * libcrypto/libssl-backed module under a `qjs:*` import name; the
+ * Node.js shim in node-compat/bootstrap.js wraps these to provide the
+ * actual `crypto` / `tls` / `https` modules. */
+JSModuleDef *qjs_init_module_crypto_bridge(JSContext *ctx, const char *name);
+
 static int node__argc;
 static char **node__argv;
 
@@ -49,6 +55,9 @@ static JSContext *JS_NewNodeContext(JSRuntime *rt)
     js_init_module_std(ctx, "qjs:std");
     js_init_module_os(ctx, "qjs:os");
     js_init_module_bjson(ctx, "qjs:bjson");
+
+    /* Register native crypto bridge (libcrypto-backed). */
+    qjs_init_module_crypto_bridge(ctx, "qjs:crypto-bridge");
 
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyFunctionList(ctx, global, global_obj, countof(global_obj));

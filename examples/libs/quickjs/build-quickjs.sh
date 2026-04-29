@@ -163,12 +163,35 @@ QJS_SIZE=$(wc -c < "$BIN_DIR/qjs.wasm" | tr -d ' ')
 # ----------------------------------------------------------------
 # Step 5: Build node.wasm (Node.js compat layer)
 # ----------------------------------------------------------------
+# Resolve OpenSSL libs via the package resolver (xtask). libcrypto powers
+# the qjs:crypto-bridge module that node.wasm exposes for sha256/hmac/
+# secure random; libssl will be picked up by Phase C's TLS bridge.
+echo "Resolving OpenSSL via xtask build-deps..."
+OPENSSL_PREFIX="$(cd "$REPO_ROOT" && cargo run --quiet -p xtask --target aarch64-apple-darwin -- build-deps resolve openssl 2>/dev/null || true)"
+if [ -z "$OPENSSL_PREFIX" ] || [ ! -f "$OPENSSL_PREFIX/lib/libcrypto.a" ]; then
+    echo "ERROR: OpenSSL libs not found via xtask resolver." >&2
+    echo "Tried OPENSSL_PREFIX=$OPENSSL_PREFIX" >&2
+    echo "Run 'cargo run -p xtask -- build-deps resolve openssl' to debug." >&2
+    exit 1
+fi
+echo "OpenSSL prefix: $OPENSSL_PREFIX"
+
+OPENSSL_LIBS=("$OPENSSL_PREFIX/lib/libssl.a" "$OPENSSL_PREFIX/lib/libcrypto.a")
+OPENSSL_CFLAGS=("-I$OPENSSL_PREFIX/include")
+
 echo "Compiling node CLI..."
 NODE_OBJS=()
 
 # Compile node-main.c
 $CC "${CFLAGS[@]}" -c "$SCRIPT_DIR/node-main.c" -o "$BIN_DIR/node-main.o"
 NODE_OBJS+=("$BIN_DIR/node-main.o")
+
+# Compile crypto bridge (libcrypto-backed; required for createHash /
+# createHmac / randomBytes in node-compat/bootstrap.js).
+$CC "${CFLAGS[@]}" "${OPENSSL_CFLAGS[@]}" \
+    -c "$SCRIPT_DIR/qjs-crypto-bridge.c" \
+    -o "$BIN_DIR/qjs-crypto-bridge.o"
+NODE_OBJS+=("$BIN_DIR/qjs-crypto-bridge.o")
 
 # Compile bootstrap bytecode
 $CC "${CFLAGS[@]}" -c "$GEN_DIR/node-bootstrap.c" -o "$BIN_DIR/node-bootstrap.o"
@@ -179,7 +202,12 @@ $CC "${CFLAGS[@]}" -c "$SRC_DIR/gen/repl.c" -o "$BIN_DIR/repl-node.o"
 NODE_OBJS+=("$BIN_DIR/repl-node.o")
 
 echo "Linking node..."
-$CC "${NODE_OBJS[@]}" "${OBJS[@]}" -lm -o "$BIN_DIR/node.wasm"
+# libssl before libcrypto: archive linker resolves backwards. libssl is
+# unused in Phase B but linking it now keeps the build script stable for
+# Phase C's TLS bridge addition.
+$CC "${NODE_OBJS[@]}" "${OBJS[@]}" \
+    "${OPENSSL_LIBS[@]}" \
+    -lm -o "$BIN_DIR/node.wasm"
 
 # Asyncify for fork support
 echo "Applying asyncify to node..."

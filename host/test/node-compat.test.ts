@@ -216,4 +216,162 @@ describe.skipIf(!hasNode)("Node.js compat (node.wasm)", () => {
     expect(result.stdout).toContain("assert: ok");
     expect(result.exitCode).toBe(0);
   });
+
+  // -----------------------------------------------------------------
+  // crypto module — libcrypto-backed via qjs:crypto-bridge.
+  // Phase B of the Claude Code port (docs/plans/2026-04-29-claude-code-cli-plan.md).
+  // -----------------------------------------------------------------
+  it("crypto.createHash('sha256') matches RFC 6234 vector", async () => {
+    const result = await runCentralizedProgram({
+      programPath: nodeWasm!,
+      argv: [
+        "node", "-e",
+        [
+          'var c = require("crypto")',
+          'var h = c.createHash("sha256").update("abc").digest("hex")',
+          'console.log("sha256:", h)',
+        ].join(";"),
+      ],
+    });
+    expect(result.stdout).toContain(
+      "sha256: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("crypto.createHash('sha1') matches FIPS 180-1 vector", async () => {
+    const result = await runCentralizedProgram({
+      programPath: nodeWasm!,
+      argv: [
+        "node", "-e",
+        [
+          'var c = require("crypto")',
+          'var h = c.createHash("sha1").update("abc").digest("hex")',
+          'console.log("sha1:", h)',
+        ].join(";"),
+      ],
+    });
+    expect(result.stdout).toContain(
+      "sha1: a9993e364706816aba3e25717850c26c9cd0d89d",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("crypto.createHash chains update calls", async () => {
+    const result = await runCentralizedProgram({
+      programPath: nodeWasm!,
+      argv: [
+        "node", "-e",
+        [
+          'var c = require("crypto")',
+          // a + b + c == abc
+          'var h = c.createHash("sha256").update("a").update("b").update("c").digest("hex")',
+          'console.log("chain:", h)',
+        ].join(";"),
+      ],
+    });
+    expect(result.stdout).toContain(
+      "chain: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("crypto.createHmac('sha256') matches RFC 4231 test case 4", async () => {
+    // RFC 4231 case 4: key = 0x01 .. 0x19 (25 bytes), data = 0xcd x 50.
+    const result = await runCentralizedProgram({
+      programPath: nodeWasm!,
+      argv: [
+        "node", "-e",
+        [
+          'var c = require("crypto")',
+          'var key = Buffer.alloc(25); for (var i=0;i<25;i++) key[i]=i+1',
+          'var data = Buffer.alloc(50); data.fill(0xcd)',
+          'var h = c.createHmac("sha256", key).update(data).digest("hex")',
+          'console.log("hmac:", h)',
+        ].join(";"),
+      ],
+    });
+    expect(result.stdout).toContain(
+      "hmac: 82558a389a443c0ea4cc819899f2083a85f0faa3e578f8077a2e3ff46729665b",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("crypto.randomUUID returns a valid v4 UUID", async () => {
+    const result = await runCentralizedProgram({
+      programPath: nodeWasm!,
+      argv: [
+        "node", "-e",
+        [
+          'var c = require("crypto")',
+          'var u = c.randomUUID()',
+          'console.log("uuid:", u)',
+        ].join(";"),
+      ],
+    });
+    const m = result.stdout.match(
+      /uuid: ([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/,
+    );
+    expect(m).not.toBeNull();
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("crypto.randomBytes returns the requested length", async () => {
+    const result = await runCentralizedProgram({
+      programPath: nodeWasm!,
+      argv: [
+        "node", "-e",
+        [
+          'var c = require("crypto")',
+          'var b = c.randomBytes(32)',
+          'console.log("len:", b.length)',
+          'console.log("hex_len:", b.toString("hex").length)',
+        ].join(";"),
+      ],
+    });
+    expect(result.stdout).toContain("len: 32");
+    expect(result.stdout).toContain("hex_len: 64");
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("crypto.createHash digest() with no encoding returns Buffer", async () => {
+    const result = await runCentralizedProgram({
+      programPath: nodeWasm!,
+      argv: [
+        "node", "-e",
+        [
+          'var c = require("crypto")',
+          'var b = c.createHash("sha256").update("abc").digest()',
+          'console.log("isBuffer:", Buffer.isBuffer(b))',
+          'console.log("len:", b.length)',
+          'console.log("hex:", b.toString("hex"))',
+        ].join(";"),
+      ],
+    });
+    expect(result.stdout).toContain("isBuffer: true");
+    expect(result.stdout).toContain("len: 32");
+    expect(result.stdout).toContain(
+      "hex: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("crypto.timingSafeEqual on equal/unequal buffers", async () => {
+    const result = await runCentralizedProgram({
+      programPath: nodeWasm!,
+      argv: [
+        "node", "-e",
+        [
+          'var c = require("crypto")',
+          'var a = Buffer.from([1,2,3,4]); var b = Buffer.from([1,2,3,4])',
+          'console.log("eq:", c.timingSafeEqual(a, b))',
+          'var d = Buffer.from([1,2,3,5])',
+          'console.log("ne:", c.timingSafeEqual(a, d))',
+        ].join(";"),
+      ],
+    });
+    expect(result.stdout).toContain("eq: true");
+    expect(result.stdout).toContain("ne: false");
+    expect(result.exitCode).toBe(0);
+  });
 });

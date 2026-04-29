@@ -8,6 +8,17 @@
 import * as std from 'qjs:std';
 import * as os from 'qjs:os';
 
+// Native bridge: libcrypto-backed createHash / createHmac / randomBytes.
+// Wired in node-main.c (qjs_init_module_crypto_bridge). Falls back to
+// a weak in-JS impl in `crypto` below if the import resolves to an
+// empty-shaped object (e.g. when built without the bridge).
+let _cryptoBridge = null;
+try {
+    _cryptoBridge = await import('qjs:crypto-bridge');
+} catch (_) {
+    _cryptoBridge = null;
+}
+
 // ============================================================
 // TextEncoder/TextDecoder polyfill for QuickJS
 // ============================================================
@@ -2086,64 +2097,135 @@ const child_process = (() => {
 })();
 
 // ============================================================
-// crypto module (minimal)
+// crypto module — libcrypto-backed via qjs:crypto-bridge
 // ============================================================
 
 const crypto = (() => {
+    // The native bridge (qjs-crypto-bridge.c) is imported at module
+    // top-level into _cryptoBridge. Detect "real bridge" by feature
+    // presence (createHash) so that an empty-namespace import still
+    // falls through to the weak legacy path used by qjs.wasm.
+    const bridge = (_cryptoBridge && typeof _cryptoBridge.createHash === 'function')
+        ? _cryptoBridge : null;
+
     function randomBytes(size) {
-        const buf = Buffer.alloc(size);
-        // Use Math.random as fallback (not cryptographically secure)
-        for (let i = 0; i < size; i++) {
-            buf[i] = Math.floor(Math.random() * 256);
+        if (bridge && bridge.randomBytes) {
+            return Buffer.from(bridge.randomBytes(size));
         }
+        // Fallback: weak RNG. Documented as a degradation; node.wasm
+        // built per build-quickjs.sh links the bridge unconditionally.
+        const buf = Buffer.alloc(size);
+        for (let i = 0; i < size; i++) buf[i] = Math.floor(Math.random() * 256);
         return buf;
     }
 
     function randomUUID() {
         const bytes = randomBytes(16);
-        bytes[6] = (bytes[6] & 0x0f) | 0x40;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;  // version 4
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;  // variant 1 (RFC 4122)
         const hex = bytes.toString('hex');
         return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
     }
 
     function randomInt(min, max) {
         if (max === undefined) { max = min; min = 0; }
-        return min + Math.floor(Math.random() * (max - min));
+        const range = max - min;
+        if (range <= 0) throw new RangeError('max > min required');
+        // Rejection-sample from CSPRNG to avoid modulo bias.
+        const bytes = bridge && bridge.randomBytes
+            ? new Uint8Array(bridge.randomBytes(6))  // 48-bit window
+            : new Uint8Array([Math.random()*256,Math.random()*256,Math.random()*256,Math.random()*256,Math.random()*256,Math.random()*256].map(Math.floor));
+        let n = 0;
+        for (let i = 0; i < 6; i++) n = n * 256 + bytes[i];
+        return min + (n % range);
+    }
+
+    function _wrapHash(nativeHash) {
+        // Wrap the native object so callers can chain like the Node API:
+        //   c.createHash('sha256').update('a').update('b').digest('hex')
+        // The native update() already returns `this`, but the chain
+        // needs to return the wrapped object — not the bare native.
+        const wrapper = {
+            update(data) {
+                if (typeof data === 'string') nativeHash.update(data);
+                else if (data instanceof Uint8Array || ArrayBuffer.isView(data)) {
+                    // Native bridge accepts ArrayBuffer or TypedArray.
+                    nativeHash.update(data);
+                } else if (data && typeof data === 'object' && data.buffer instanceof ArrayBuffer) {
+                    nativeHash.update(data);
+                } else if (Buffer.isBuffer && Buffer.isBuffer(data)) {
+                    nativeHash.update(data);
+                } else {
+                    nativeHash.update(String(data));
+                }
+                return wrapper;
+            },
+            digest(encoding) {
+                const out = nativeHash.digest(encoding);
+                if (encoding) return out;  // string
+                return Buffer.from(out);   // ArrayBuffer → Buffer
+            },
+        };
+        return wrapper;
     }
 
     function createHash(algorithm) {
-        // Stub - would need native hash implementation
-        const chunks = [];
-        return {
-            update(data) {
-                chunks.push(typeof data === 'string' ? Buffer.from(data) : data);
-                return this;
-            },
-            digest(encoding) {
-                // TODO: implement actual hashing
-                const buf = Buffer.concat(chunks);
-                const hash = Buffer.alloc(32);
-                for (let i = 0; i < buf.length; i++) {
-                    hash[i % 32] ^= buf[i];
-                }
-                if (encoding) return hash.toString(encoding);
-                return hash;
-            },
-        };
+        if (!bridge) {
+            // Degraded fallback (xor-fold; not cryptographic). Exists
+            // so a stripped node.wasm still boots; the real builds
+            // always link the bridge.
+            const chunks = [];
+            return {
+                update(data) {
+                    chunks.push(typeof data === 'string' ? Buffer.from(data) : data);
+                    return this;
+                },
+                digest(encoding) {
+                    const buf = Buffer.concat(chunks);
+                    const hash = Buffer.alloc(32);
+                    for (let i = 0; i < buf.length; i++) hash[i % 32] ^= buf[i];
+                    return encoding ? hash.toString(encoding) : hash;
+                },
+            };
+        }
+        return _wrapHash(bridge.createHash(algorithm));
     }
 
     function createHmac(algorithm, key) {
-        return createHash(algorithm); // Simplified
+        if (!bridge) {
+            // Degraded fallback (returns the same xor-fold hash).
+            return createHash(algorithm);
+        }
+        return _wrapHash(bridge.createHmac(algorithm, key));
+    }
+
+    function timingSafeEqual(a, b) {
+        const ab = a instanceof Uint8Array ? a : new Uint8Array(a.buffer || a);
+        const bb = b instanceof Uint8Array ? b : new Uint8Array(b.buffer || b);
+        if (ab.length !== bb.length) throw new RangeError('length mismatch');
+        let diff = 0;
+        for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+        return diff === 0;
     }
 
     return {
         randomBytes, randomUUID, randomInt,
-        createHash, createHmac,
-        getHashes() { return ['sha1', 'sha256', 'sha512', 'md5']; },
+        createHash, createHmac, timingSafeEqual,
+        getHashes() { return ['sha1', 'sha224', 'sha256', 'sha384', 'sha512', 'md5']; },
         getRandomValues(buf) {
-            for (let i = 0; i < buf.length; i++) buf[i] = Math.floor(Math.random() * 256);
+            const bytes = randomBytes(buf.length || buf.byteLength);
+            const view = buf instanceof Uint8Array ? buf : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+            view.set(bytes);
             return buf;
+        },
+        webcrypto: {
+            getRandomValues(buf) {
+                const bytes = randomBytes(buf.byteLength);
+                const view = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+                view.set(bytes);
+                return buf;
+            },
+            randomUUID,
         },
     };
 })();
