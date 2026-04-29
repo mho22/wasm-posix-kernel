@@ -1,0 +1,6 @@
+# Game data is fetched lazily by examples/libs/scummvm/fetch-demos.sh
+# and the built scummvm.wasm is installed by build-scummvm.sh. None of
+# them are checked in.
+*
+!.gitignore
+!README.md

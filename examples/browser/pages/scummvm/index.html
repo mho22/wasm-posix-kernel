@@ -3,20 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DOOM — wasm-posix-kernel</title>
+  <title>ScummVM — wasm-posix-kernel</title>
   <link rel="stylesheet" href="../../lib/layout.css">
   <style>
-    /* Stack the page contents in the main column without forcing the
-     * canvas to a fixed size; the canvas itself absorbs the leftover
-     * space below the header / status / controls. */
-    .doom-page {
+    .scummvm-page {
       display: flex;
       flex-direction: column;
       gap: 12px;
       min-height: 0;
       flex: 1 1 auto;
     }
-    .doom-frame {
+    .scummvm-frame {
       background: #000;
       padding: 8px;
       border: 1px solid #333;
@@ -31,33 +28,40 @@
       image-rendering: pixelated;
       max-width: 100%;
       max-height: 100%;
-      /* DOOM's framebuffer is 640×400 (8:5). Honor that aspect ratio
-       * while scaling to fit whichever axis is the binding constraint. */
       aspect-ratio: 8 / 5;
       width: auto;
       height: auto;
       display: block;
       outline: none;
       background: #000;
+      cursor: none;
     }
-    .doom-status {
+    .scummvm-status {
       color: #888;
       font-family: monospace;
     }
-    .doom-controls {
+    .scummvm-controls {
       color: #ccc;
       font-size: 0.9em;
       max-width: 800px;
     }
-    .doom-controls dl {
+    .scummvm-controls dl {
       display: grid;
-      grid-template-columns: 120px 1fr;
+      grid-template-columns: 160px 1fr;
       gap: 4px 16px;
       margin: 8px 0 0;
     }
-    .doom-controls dt {
+    .scummvm-controls dt {
       font-family: monospace;
       color: #6cf;
+    }
+    .scummvm-games {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .scummvm-games button.primary[aria-current="true"] {
+      box-shadow: 0 0 0 2px #6cf;
     }
   </style>
 </head>
@@ -78,40 +82,42 @@
     <a href="/pages/ruby/">Ruby</a>
     <a href="/pages/erlang/">Erlang</a>
     <a href="/pages/texlive/">TeX Live</a>
-    <a href="/pages/doom/" aria-current="page">DOOM</a>
-    <a href="/pages/scummvm/">ScummVM</a>
+    <a href="/pages/doom/">DOOM</a>
+    <a href="/pages/scummvm/" aria-current="page">ScummVM</a>
   </nav>
-  <div class="main doom-page">
+  <div class="main scummvm-page">
     <div class="main-header">
-      <h1>DOOM on wasm-posix-kernel</h1>
+      <h1>ScummVM on wasm-posix-kernel</h1>
       <p class="subtitle">
-        unmodified <a href="https://github.com/maximevince/fbDOOM" target="_blank" rel="noopener">fbDOOM</a>
-        running in your browser via the kernel's <code>/dev/fb0</code> Linux fbdev surface.
+        unmodified <a href="https://www.scummvm.org/" target="_blank" rel="noopener">ScummVM 2.8</a>
+        running in your browser via the SDL2 <code>fbposix</code> video
+        driver and the kernel's <code>/dev/fb0</code> + <code>/dev/input/mice</code>.
       </p>
     </div>
 
-    <div>
-      <button id="start" class="primary">Start</button>
-      <span class="doom-status" id="status" style="margin-left: 12px;">Click Start to boot fbdoom.</span>
+    <div class="scummvm-games">
+      <button data-game="sky"            class="primary">Beneath a Steel Sky (full)</button>
+      <button data-game="tentacle-demo"  class="primary">Day of the Tentacle (demo)</button>
+      <button data-game="monkey-demo"    class="primary">Monkey Island (demo)</button>
+      <span class="scummvm-status" id="status" style="margin-left: 12px;">Pick a game to start.</span>
     </div>
 
-    <div class="doom-frame">
+    <div class="scummvm-frame">
       <canvas id="fb" tabindex="0" width="640" height="400"></canvas>
     </div>
 
-    <div class="doom-controls">
+    <div class="scummvm-controls">
       <strong>Controls</strong>
       <dl>
-        <dt>WASD / arrows</dt><dd>Move forward / back / strafe</dd>
-        <dt>Space</dt><dd>Use / open door</dd>
-        <dt>Ctrl</dt><dd>Fire</dd>
-        <dt>Enter</dt><dd>Confirm menu</dd>
-        <dt>Esc</dt><dd>Menu</dd>
+        <dt>Click canvas</dt><dd>Engage pointer-lock for mouse cursor</dd>
+        <dt>Esc</dt><dd>Quit menu (engine-defined)</dd>
+        <dt>F5</dt><dd>Save / load (engine main menu)</dd>
+        <dt>Ctrl + Q</dt><dd>Quit ScummVM</dd>
       </dl>
       <p style="margin-top: 8px;">
-        Click the canvas to give it keyboard focus. The browser sends
-        AT-set-1 scancodes (Linux MEDIUMRAW) through stdin; fbDOOM
-        decodes them via its own scancode → DOOM-key table.
+        Audio is silent until <code>/dev/dsp</code> ships from the
+        concurrent audio task. Game saves persist for the tab session
+        only (in-memory VFS).
       </p>
     </div>
   </div>
