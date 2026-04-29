@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScummVM — wasm-posix-kernel</title>
+  <link rel="stylesheet" href="../../lib/layout.css">
+  <style>
+    .scummvm-page {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+      flex: 1 1 auto;
+    }
+    .scummvm-frame {
+      background: #000;
+      padding: 8px;
+      border: 1px solid #333;
+      border-radius: 4px;
+      flex: 1 1 auto;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    canvas#fb {
+      image-rendering: pixelated;
+      max-width: 100%;
+      max-height: 100%;
+      /* SDL2's wasmposix video driver presents 640x400 BGRA32; the
+       * SCUMM/Sky engines paint 320x200 internally and the SDL2 driver
+       * 2x-scales nearest-neighbor. */
+      aspect-ratio: 8 / 5;
+      width: auto;
+      height: auto;
+      display: block;
+      outline: none;
+      background: #000;
+      cursor: crosshair;
+    }
+    .scummvm-status {
+      color: #888;
+      font-family: monospace;
+    }
+    .scummvm-controls {
+      color: #ccc;
+      font-size: 0.9em;
+      max-width: 800px;
+    }
+    .scummvm-controls dl {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 4px 16px;
+      margin: 8px 0 0;
+    }
+    .scummvm-controls dt {
+      font-family: monospace;
+      color: #6cf;
+    }
+    .scummvm-note {
+      margin-top: 8px;
+      color: #aaa;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="sidebar-title">Demos</div>
+    <a href="/">Simple Programs</a>
+    <a href="/pages/nginx/">nginx</a>
+    <a href="/pages/php/">PHP CLI</a>
+    <a href="/pages/nginx-php/">nginx + PHP-FPM</a>
+    <a href="/pages/mariadb/">MariaDB</a>
+    <a href="/pages/redis/">Redis</a>
+    <a href="/pages/wordpress/">WordPress (LEMP-but-SQLite)</a>
+    <a href="/pages/lamp/">WordPress (LEMP)</a>
+    <a href="/pages/shell/">Shell</a>
+    <a href="/pages/python/">Python</a>
+    <a href="/pages/perl/">Perl</a>
+    <a href="/pages/ruby/">Ruby</a>
+    <a href="/pages/erlang/">Erlang</a>
+    <a href="/pages/texlive/">TeX Live</a>
+    <a href="/pages/doom/">DOOM</a>
+    <a href="/pages/scummvm/" aria-current="page">ScummVM</a>
+  </nav>
+  <div class="main scummvm-page">
+    <div class="main-header">
+      <h1>ScummVM on wasm-posix-kernel</h1>
+      <p class="subtitle">
+        unmodified <a href="https://github.com/scummvm/scummvm" target="_blank" rel="noopener">ScummVM 2.8</a>
+        running in your browser, playing the freeware
+        <em>Beneath a Steel Sky</em>. Video via <code>/dev/fb0</code>,
+        audio via <code>/dev/dsp</code>, mouse via <code>/dev/input/mice</code>,
+        all bridged by SDL2.
+      </p>
+    </div>
+
+    <div>
+      <button id="start" class="primary">Start</button>
+      <span class="scummvm-status" id="status" style="margin-left: 12px;">Click Start to boot ScummVM.</span>
+    </div>
+
+    <div class="scummvm-frame">
+      <canvas id="fb" tabindex="0" width="640" height="400"></canvas>
+    </div>
+
+    <div class="scummvm-controls">
+      <strong>Controls</strong>
+      <dl>
+        <dt>Left-click</dt><dd>Walk to / use object or hotspot</dd>
+        <dt>Right-click</dt><dd>Examine / look at</dd>
+        <dt>Space</dt><dd>Pause</dd>
+        <dt>F5</dt><dd>Save / Load / Quit menu</dd>
+        <dt>Esc</dt><dd>Skip cutscene / dialogue</dd>
+        <dt>. (period)</dt><dd>Skip current line</dd>
+      </dl>
+      <p class="scummvm-note">
+        Click the canvas first — the browser will request pointer-lock so
+        mouse motion can be relayed to the engine. Press
+        <kbd>Esc</kbd> twice quickly to release pointer-lock.
+      </p>
+      <p class="scummvm-note">
+        Saves persist while this tab is open. Reload = fresh start.
+      </p>
+    </div>
+  </div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
