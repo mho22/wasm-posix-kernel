@@ -458,11 +458,7 @@ function buildImportObject(
     }
   }
 
-  // Wasm EH-style setjmp/longjmp (musl/src/setjmp/wasm32/rt.c calls
-  // __builtin_wasm_throw(1, arg) for longjmp). Recent llvm/lld emit a
-  // tag import for the C_LONGJMP exception, which the host must satisfy
-  // for instantiation to succeed. Parameter is the i32 pointer to the
-  // jmp_buf's `arg` payload.
+  // llvm/lld ≥22 emit __c_longjmp as a tag import for setjmp users; instantiation fails silently without it.
   if (moduleImports.some(i => i.module === "env" && i.name === "__c_longjmp" && i.kind === "tag")) {
     envImports.__c_longjmp = new WebAssembly.Tag({ parameters: ["i32"] });
   }
