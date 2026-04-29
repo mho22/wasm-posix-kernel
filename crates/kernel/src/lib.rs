@@ -10,6 +10,7 @@ pub mod fd;
 pub mod fork;
 pub mod lock;
 pub mod memory;
+pub mod mouse;
 pub mod mqueue;
 pub mod ipc;
 pub mod ofd;

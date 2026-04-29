@@ -1,5 +1,5 @@
 {
-  "abi_version": 8,
+  "abi_version": 9,
   "asyncify_save_slots": [
     {
       "meaning": "parent TLS base (__tls_base) saved for child rewind",
@@ -718,6 +718,11 @@
       "kind": "func",
       "name": "kernel_inject_connection",
       "signature": "(i32,i32,i32,i32,i32,i32,i32) -> (i32)"
+    },
+    {
+      "kind": "func",
+      "name": "kernel_inject_mouse_event",
+      "signature": "(i32,i32,i32) -> ()"
     },
     {
       "kind": "func",

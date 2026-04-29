@@ -46,11 +46,12 @@ fn parse_ascii_usize(bytes: &[u8]) -> Option<usize> {
 /// Virtual character devices handled entirely in-kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VirtualDevice {
-    Null,     // /dev/null     host_handle = -1
-    Zero,     // /dev/zero     host_handle = -2
-    Urandom,  // /dev/urandom  host_handle = -3
-    Full,     // /dev/full     host_handle = -4
-    Fb0,      // /dev/fb0      host_handle = -5
+    Null,     // /dev/null         host_handle = -1
+    Zero,     // /dev/zero         host_handle = -2
+    Urandom,  // /dev/urandom      host_handle = -3
+    Full,     // /dev/full         host_handle = -4
+    Fb0,      // /dev/fb0          host_handle = -5
+    Mice,     // /dev/input/mice   host_handle = -6
 }
 
 impl VirtualDevice {
@@ -62,6 +63,7 @@ impl VirtualDevice {
             VirtualDevice::Urandom => -3,
             VirtualDevice::Full => -4,
             VirtualDevice::Fb0 => -5,
+            VirtualDevice::Mice => -6,
         }
     }
 
@@ -73,6 +75,7 @@ impl VirtualDevice {
             -3 => Some(VirtualDevice::Urandom),
             -4 => Some(VirtualDevice::Full),
             -5 => Some(VirtualDevice::Fb0),
+            -6 => Some(VirtualDevice::Mice),
             _ => None,
         }
     }
@@ -85,6 +88,7 @@ impl VirtualDevice {
             VirtualDevice::Urandom => 3,
             VirtualDevice::Full => 4,
             VirtualDevice::Fb0 => 5,
+            VirtualDevice::Mice => 6,
         }
     }
 }
@@ -102,6 +106,7 @@ fn match_virtual_device(path: &[u8]) -> Option<VirtualDevice> {
         b"/dev/urandom" | b"/dev/random" => Some(VirtualDevice::Urandom),
         b"/dev/full" => Some(VirtualDevice::Full),
         b"/dev/fb0" => Some(VirtualDevice::Fb0),
+        b"/dev/input/mice" => Some(VirtualDevice::Mice),
         _ => None,
     }
 }
@@ -161,6 +166,56 @@ fn proc_has_fb0_fd(proc: &Process) -> bool {
                 if ofd.file_type == FileType::CharDevice
                     && VirtualDevice::from_host_handle(ofd.host_handle)
                         == Some(VirtualDevice::Fb0)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Try to claim `/dev/input/mice` for the calling process.
+///
+/// Single-owner like `/dev/fb0` — second open from a different pid is
+/// `EBUSY`. Re-opens by the current owner are accepted.
+fn acquire_mice_or_busy(pid: u32) -> Result<(), Errno> {
+    let pid = pid as i32;
+    let owner = crate::mouse::MICE_OWNER.load(core::sync::atomic::Ordering::SeqCst);
+    if owner != -1 && owner != pid {
+        return Err(Errno::EBUSY);
+    }
+    let _ = crate::mouse::MICE_OWNER.compare_exchange(
+        -1, pid,
+        core::sync::atomic::Ordering::SeqCst,
+        core::sync::atomic::Ordering::SeqCst,
+    );
+    Ok(())
+}
+
+/// Release `/dev/input/mice` ownership held by `pid`, if any. Drops any
+/// pending packets so the next opener starts from a clean slate.
+/// Idempotent.
+pub(crate) fn maybe_release_mice(pid: u32) {
+    let prev = crate::mouse::MICE_OWNER.compare_exchange(
+        pid as i32, -1,
+        core::sync::atomic::Ordering::SeqCst,
+        core::sync::atomic::Ordering::SeqCst,
+    );
+    if prev.is_ok() {
+        crate::mouse::reset();
+    }
+}
+
+/// True iff `proc` still has an open fd referencing `/dev/input/mice`.
+fn proc_has_mice_fd(proc: &Process) -> bool {
+    use crate::ofd::FileType;
+    for fd_i in 0..1024i32 {
+        if let Ok(entry) = proc.fd_table.get(fd_i) {
+            if let Some(ofd) = proc.ofd_table.get(entry.ofd_ref.0) {
+                if ofd.file_type == FileType::CharDevice
+                    && VirtualDevice::from_host_handle(ofd.host_handle)
+                        == Some(VirtualDevice::Mice)
                 {
                     return true;
                 }
@@ -293,6 +348,9 @@ pub fn sys_open(
     if let Some(dev) = match_virtual_device(&resolved) {
         if dev == VirtualDevice::Fb0 {
             acquire_fb0_or_busy(proc.pid)?;
+        }
+        if dev == VirtualDevice::Mice {
+            acquire_mice_or_busy(proc.pid)?;
         }
         let status_flags = oflags & !CREATION_FLAGS;
         let ofd_idx = proc.ofd_table.create(
@@ -605,6 +663,15 @@ pub fn sys_close(
         && !proc_has_fb0_fd(proc)
     {
         maybe_release_fb0(proc.pid);
+    }
+
+    // /dev/input/mice ownership: release once the process has dropped
+    // its last Mice fd. No mmap relationship to consider (unlike fb0).
+    if file_type == FileType::CharDevice
+        && VirtualDevice::from_host_handle(host_handle) == Some(VirtualDevice::Mice)
+        && !proc_has_mice_fd(proc)
+    {
+        maybe_release_mice(proc.pid);
     }
 
     Ok(())
@@ -932,6 +999,13 @@ pub fn sys_read(
                         }
                         VirtualDevice::Urandom => {
                             host.host_getrandom(buf)?
+                        }
+                        VirtualDevice::Mice => {
+                            let n = crate::mouse::read_into(buf);
+                            if n == 0 {
+                                return Err(Errno::EAGAIN);
+                            }
+                            n
                         }
                     };
                     return Ok(n);
@@ -3167,6 +3241,10 @@ pub fn sys_execve(proc: &mut Process, host: &mut dyn HostIO, path: &[u8]) -> Res
         proc.fb_binding = None;
         maybe_release_fb0(proc.pid);
     }
+    // /dev/input/mice cleanup: exec also drops mouse ownership. The
+    // post-exec image starts with a clean queue — no stale packets from
+    // the parent program survive across exec.
+    maybe_release_mice(proc.pid);
     // Resolve relative paths against process CWD so the host sees absolute paths.
     // This is critical for posix_spawn with chdir file actions — the child's CWD
     // may differ from the initial data directory the host knows about.
@@ -5365,12 +5443,26 @@ fn poll_check(proc: &mut Process, fds: &mut [WasmPollFd]) -> i32 {
                 }
             }
             FileType::Regular | FileType::CharDevice | FileType::Directory | FileType::MemFd => {
-                // Regular files and char devices are always ready
-                if pollfd.events & POLLIN != 0 {
-                    revents |= POLLIN;
-                }
-                if pollfd.events & POLLOUT != 0 {
-                    revents |= POLLOUT;
+                // /dev/input/mice gates POLLIN on the actual queue state
+                // — readiness here mirrors what sys_read returns. Without
+                // this special case, poll() would spin because the
+                // generic char-device branch reports always-ready.
+                if ofd.file_type == FileType::CharDevice
+                    && VirtualDevice::from_host_handle(ofd.host_handle)
+                        == Some(VirtualDevice::Mice)
+                {
+                    if pollfd.events & POLLIN != 0 && crate::mouse::has_data() {
+                        revents |= POLLIN;
+                    }
+                    // Mice doesn't accept writes — never report POLLOUT.
+                } else {
+                    // Regular files and char devices are always ready
+                    if pollfd.events & POLLIN != 0 {
+                        revents |= POLLIN;
+                    }
+                    if pollfd.events & POLLOUT != 0 {
+                        revents |= POLLOUT;
+                    }
                 }
             }
             FileType::PtyMaster => {
@@ -5609,6 +5701,9 @@ pub fn sys_openat(
     if let Some(dev) = match_virtual_device(&resolved) {
         if dev == VirtualDevice::Fb0 {
             acquire_fb0_or_busy(proc.pid)?;
+        }
+        if dev == VirtualDevice::Mice {
+            acquire_mice_or_busy(proc.pid)?;
         }
         let status_flags = oflags & !CREATION_FLAGS;
         let ofd_idx = proc.ofd_table.create(
@@ -13359,11 +13454,12 @@ mod tests {
 
     #[test]
     fn test_virtual_device_roundtrip() {
-        for dev in [VirtualDevice::Null, VirtualDevice::Zero, VirtualDevice::Urandom, VirtualDevice::Full, VirtualDevice::Fb0] {
+        for dev in [VirtualDevice::Null, VirtualDevice::Zero, VirtualDevice::Urandom, VirtualDevice::Full, VirtualDevice::Fb0, VirtualDevice::Mice] {
             assert_eq!(VirtualDevice::from_host_handle(dev.host_handle()), Some(dev));
         }
         assert_eq!(VirtualDevice::from_host_handle(0), None);
-        assert_eq!(VirtualDevice::from_host_handle(-6), None);
+        // First sentinel past the allocated range — must not roundtrip.
+        assert_eq!(VirtualDevice::from_host_handle(-7), None);
     }
 
     // ===== Loopback socket tests =====
@@ -15604,5 +15700,143 @@ mod tests {
         let fd2 = sys_open(&mut proc2, &mut host, b"/dev/fb0", O_RDWR, 0).unwrap();
         sys_close(&mut proc2, &mut host, fd2).unwrap();
         assert_eq!(crate::process_table::FB0_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    // -----------------------------------------------------------------
+    // /dev/input/mice tests — mirror the fb0 surface.
+    // -----------------------------------------------------------------
+
+    /// Serializes tests that touch MICE_OWNER + the global mouse queue.
+    /// Both pieces of state are process-global, so concurrent tests would
+    /// interfere. Same pattern as `FB0_OWNER_LOCK` above.
+    static MICE_OWNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn reset_mice_state() {
+        use core::sync::atomic::Ordering;
+        crate::mouse::MICE_OWNER.store(-1, Ordering::SeqCst);
+        crate::mouse::reset();
+    }
+
+    #[test]
+    fn match_virtual_device_recognizes_mice() {
+        assert_eq!(match_virtual_device(b"/dev/input/mice"), Some(VirtualDevice::Mice));
+        // No /dev/input/event0 — evdev is out of scope for v1.
+        assert_eq!(match_virtual_device(b"/dev/input/event0"), None);
+    }
+
+    #[test]
+    fn mice_stat_is_chr() {
+        let st = virtual_device_stat(VirtualDevice::Mice, 0, 0);
+        assert_eq!(st.st_mode & wasm_posix_shared::mode::S_IFMT,
+                   wasm_posix_shared::mode::S_IFCHR);
+        assert_eq!(st.st_ino, VirtualDevice::Mice.ino());
+    }
+
+    #[test]
+    fn open_mice_acquires_ownership_and_second_open_from_other_pid_is_ebusy() {
+        use core::sync::atomic::Ordering;
+        let _g = MICE_OWNER_LOCK.lock().unwrap();
+        reset_mice_state();
+
+        let mut proc1 = Process::new(1);
+        let mut proc2 = Process::new(2);
+        let mut host = MockHostIO::new();
+
+        let fd1 = sys_open(&mut proc1, &mut host, b"/dev/input/mice",
+                           O_RDONLY, 0).unwrap();
+        assert_eq!(crate::mouse::MICE_OWNER.load(Ordering::SeqCst),
+                   proc1.pid as i32);
+
+        let err = sys_open(&mut proc2, &mut host, b"/dev/input/mice",
+                           O_RDONLY, 0).unwrap_err();
+        assert_eq!(err, Errno::EBUSY);
+
+        // Re-open by the SAME process is allowed.
+        let fd1b = sys_open(&mut proc1, &mut host, b"/dev/input/mice",
+                            O_RDONLY, 0).unwrap();
+        assert_ne!(fd1, fd1b);
+        sys_close(&mut proc1, &mut host, fd1).unwrap();
+        sys_close(&mut proc1, &mut host, fd1b).unwrap();
+    }
+
+    #[test]
+    fn read_mice_drains_injected_packets() {
+        let _g = MICE_OWNER_LOCK.lock().unwrap();
+        reset_mice_state();
+
+        let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
+        let fd = sys_open(&mut proc, &mut host, b"/dev/input/mice",
+                          O_RDONLY, 0).unwrap();
+
+        crate::mouse::inject_event(7, -3, 0b001);
+
+        let mut buf = [0u8; 3];
+        let n = sys_read(&mut proc, &mut host, fd, &mut buf).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(buf[1] as i8, 7);
+        assert_eq!(buf[2] as i8, -3);
+        // bit3 (frame sync) + left button (bit0) + dy negative (bit5)
+        assert_eq!(buf[0], 0x08 | 0x01 | 0x20);
+
+        sys_close(&mut proc, &mut host, fd).unwrap();
+    }
+
+    #[test]
+    fn read_mice_returns_eagain_when_empty() {
+        let _g = MICE_OWNER_LOCK.lock().unwrap();
+        reset_mice_state();
+
+        let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
+        let fd = sys_open(&mut proc, &mut host, b"/dev/input/mice",
+                          O_RDONLY, 0).unwrap();
+
+        let mut buf = [0u8; 3];
+        let err = sys_read(&mut proc, &mut host, fd, &mut buf).unwrap_err();
+        assert_eq!(err, Errno::EAGAIN);
+
+        sys_close(&mut proc, &mut host, fd).unwrap();
+    }
+
+    #[test]
+    fn close_mice_releases_owner() {
+        use core::sync::atomic::Ordering;
+        let _g = MICE_OWNER_LOCK.lock().unwrap();
+        reset_mice_state();
+
+        let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
+        let fd = sys_open(&mut proc, &mut host, b"/dev/input/mice",
+                          O_RDONLY, 0).unwrap();
+        assert_eq!(crate::mouse::MICE_OWNER.load(Ordering::SeqCst),
+                   proc.pid as i32);
+
+        // Buffered packet should be discarded on close.
+        crate::mouse::inject_event(1, 1, 0);
+        sys_close(&mut proc, &mut host, fd).unwrap();
+        assert_eq!(crate::mouse::MICE_OWNER.load(Ordering::SeqCst), -1);
+        assert!(!crate::mouse::has_data(),
+                "close should reset the queue when releasing ownership");
+    }
+
+    #[test]
+    fn exec_clears_mice_owner() {
+        use core::sync::atomic::Ordering;
+        let _g = MICE_OWNER_LOCK.lock().unwrap();
+        reset_mice_state();
+
+        let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
+        let _fd = sys_open(&mut proc, &mut host, b"/dev/input/mice",
+                           O_RDONLY, 0).unwrap();
+        assert_eq!(crate::mouse::MICE_OWNER.load(Ordering::SeqCst),
+                   proc.pid as i32);
+
+        crate::mouse::inject_event(2, 2, 0);
+        sys_execve(&mut proc, &mut host, b"/bin/sh").unwrap();
+        assert_eq!(crate::mouse::MICE_OWNER.load(Ordering::SeqCst), -1);
+        assert!(!crate::mouse::has_data(),
+                "exec should reset the queue when releasing ownership");
     }
 }

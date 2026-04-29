@@ -501,6 +501,29 @@ Cleanup paths (`munmap`, last `close` once unmapped, process exit, `exec`) clear
 
 ABI version bumped 5 → 6 to capture the new `repr(C)` structs `FbBitfield`, `FbVarScreenInfo`, `FbFixScreenInfo`. See `crates/shared/src/lib.rs::fbdev` and `abi/snapshot.json`.
 
+## Mouse input (`/dev/input/mice`)
+
+The kernel exposes a Linux `mousedev` PS/2 surface so unmodified fbdev software (fbDOOM, etc.) gets mouse input from the browser canvas. Direction is reversed vs. fbdev: events flow **host → kernel → process**.
+
+```
+   browser main thread                kernel-worker / kernel              user process
+   ─────────────────────              ──────────────────────             ─────────────────
+   canvas mousemove   ────►  postMessage("mouse_inject")
+                             kernel_inject_mouse_event(dx,dy,btn)
+                                                   ─────►  mouse::inject_event
+                                                           encode 3-byte PS/2 frame
+                                                           push to global VecDeque (4096 cap)
+                                                                                   ◄────  open("/dev/input/mice", O_RDONLY|O_NONBLOCK)
+                                                                                          single-owner via MICE_OWNER (second open from another pid → EBUSY)
+                                                                                   ◄────  read(fd, pkt, 3)
+                                                           drain bytes from queue
+                                                                                   ─────►  decode + apply (e.g. ev_mouse for fbDOOM)
+```
+
+The kernel buffers raw 3-byte packets — there is no userspace queue until the process allocates one and tells us about it, and a kernel-side queue lets `read()` complete synchronously without a host round-trip. The buffer is bounded at 4096 packets with whole-packet drop on overflow (≈10s at 400Hz). `poll()` returns `POLLIN` only when bytes are queued; `O_NONBLOCK` reads return `EAGAIN` when empty.
+
+Single-open semantics match real Linux mousedev exclusive-grab. The host inverts browser `deltaY` (browser positive-down → PS/2 positive-up) before injecting, so the kernel queue holds canonical PS/2 sign convention. ABI version bumped 6 → 7 to register the new `kernel_inject_mouse_event(i32, i32, u32) -> ()` export.
+
 ## Signal Subsystem
 
 Signals are delivered at syscall boundaries. When a process has a pending signal:
