@@ -103,7 +103,14 @@ Browser fetch → Service Worker intercepts
 - The pixel buffer lives in the process's `WebAssembly.Memory` (a `SharedArrayBuffer`); the kernel notifies the host of `(pid, addr, len, w, h, stride, fmt)` on `mmap`, and the host renders via `requestAnimationFrame` + a 2D-canvas `putImageData` per frame.
 - `host/src/framebuffer/canvas-renderer.ts::attachCanvas(canvas, registry, pid, opts)` is the consumer-side renderer.
 - Keyboard input: the demo page maps browser `KeyboardEvent.code` to AT-set-1 scancodes and feeds them through `appendStdinData(pid, …)`; fbDOOM-style software (which puts the tty into MEDIUMRAW mode) decodes those bytes as scancodes.
-- Limitations: no audio (`/dev/dsp`); no mouse; `fork` does not auto-bind the child; multi-buffering / vsync via `FBIOPAN_DISPLAY` is a no-op.
+- Limitations: no audio (`/dev/dsp`); `fork` does not auto-bind the child; multi-buffering / vsync via `FBIOPAN_DISPLAY` is a no-op.
+
+### Mouse input (`/dev/input/mice`)
+- Demo pages attach `mousemove` / `mousedown` / `mouseup` listeners to the canvas and call `BrowserKernel.injectMouseEvent(dx, dy, buttons)`. The main thread posts a `mouse_inject` message to the kernel worker, which calls the kernel's `kernel_inject_mouse_event` export. The kernel encodes a 3-byte PS/2 frame and queues it on a global ring; user processes drain the queue via `read("/dev/input/mice", …)`.
+- **Pointer Lock recommended.** The DOOM demo calls `canvas.requestPointerLock()` on first click so the browser delivers unbounded relative motion (`MouseEvent.movementX/Y`). Without pointer lock, `clientX/Y` deltas clamp at the canvas edges and feel sluggish for first-person controls. Press `Esc` to release the lock.
+- Browser `deltaY` is positive-down; the demo inverts it before injection so the kernel queue holds canonical PS/2 (positive-up) deltas.
+- Browser `MouseEvent.button` (0=L, 1=M, 2=R) is mapped to PS/2 button bits (bit0=L, bit1=R, bit2=M). Right-click suppresses the browser context menu via `contextmenu` `preventDefault()`.
+- Single-owner device (one process can hold `/dev/input/mice` open at a time; second open from another pid returns `EBUSY`).
 
 ## Browser Demos
 
@@ -121,7 +128,7 @@ Located in `examples/browser/pages/`:
 | redis | Redis 7.2 | In-memory store with threads |
 | wordpress | nginx + PHP-FPM + WP | Full stack with SQLite |
 | lamp | MariaDB + nginx + PHP-FPM + WP | Full LAMP stack |
-| doom | fbDOOM | `/dev/fb0` framebuffer + canvas renderer + keyboard via stdin |
+| doom | fbDOOM | `/dev/fb0` framebuffer + canvas renderer + keyboard via stdin + mouse via `/dev/input/mice` (pointer-locked) |
 
 Run demos: `cd examples/browser && npx vite --port 5198`
 

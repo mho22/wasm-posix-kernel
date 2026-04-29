@@ -832,6 +832,10 @@ function handlePtyResize(msg: Extract<MainToKernelMessage, { type: "pty_resize" 
   kernelWorker.ptySetWinsize(ptyIdx, msg.rows, msg.cols);
 }
 
+function handleMouseInject(msg: Extract<MainToKernelMessage, { type: "mouse_inject" }>) {
+  kernelWorker.injectMouseEvent(msg.dx, msg.dy, msg.buttons);
+}
+
 function handleRegisterPtyOutput(msg: Extract<MainToKernelMessage, { type: "register_pty_output" }>) {
   const ptyIdx = ptyByPid.get(msg.pid);
   if (ptyIdx === undefined) return;
@@ -1224,6 +1228,7 @@ sw.onmessage = (e: MessageEvent) => {
     case "destroy": handleDestroy(msg); break;
     case "register_lazy_files": memfs.importLazyEntries(msg.entries); break;
     case "register_lazy_archives": memfs.importLazyArchiveEntries(msg.entries); break;
+    case "mouse_inject": handleMouseInject(msg); break;
     default: {
       // Handle non-protocol messages (e.g., bridge port transfer)
       const raw = e.data as any;
