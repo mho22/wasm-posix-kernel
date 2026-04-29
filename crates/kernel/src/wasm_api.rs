@@ -1101,6 +1101,23 @@ pub extern "C" fn kernel_remove_process(pid: u32) -> i32 {
             }
             let _ = crate::process_table::FB0_OWNER
                 .compare_exchange(pid as i32, -1, Ordering::SeqCst, Ordering::SeqCst);
+            // /dev/dri/renderD128 cleanup: mirror the FB0 path. Destroy
+            // host-side context/surface first (the host may be holding
+            // GL resources keyed by pid), then drop the cmdbuf binding,
+            // then release ownership.
+            if let Some(state) = &removed.gl_state {
+                if let Some(c) = state.context_id {
+                    unsafe { host_gl_destroy_context(pid as i32, c) };
+                }
+                if let Some(s) = state.surface_id {
+                    unsafe { host_gl_destroy_surface(pid as i32, s) };
+                }
+            }
+            if removed.gl_binding.is_some() {
+                unsafe { host_gl_unbind(pid as i32) };
+            }
+            let _ = crate::process_table::GL_DEVICE_OWNER
+                .compare_exchange(pid as i32, -1, Ordering::SeqCst, Ordering::SeqCst);
             0
         }
         None => -(Errno::ESRCH as i32),

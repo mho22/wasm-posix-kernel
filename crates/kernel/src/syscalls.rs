@@ -3515,6 +3515,23 @@ pub fn sys_execve(proc: &mut Process, host: &mut dyn HostIO, path: &[u8]) -> Res
         proc.fb_binding = None;
         maybe_release_fb0(proc.pid);
     }
+    // /dev/dri/renderD128 cleanup: same shape — destroy host-side
+    // context/surface, drop the cmdbuf binding, release ownership. The
+    // new image must run GLIO_INIT itself to re-establish a session.
+    let pid_i32 = proc.pid as i32;
+    if let Some(mut state) = proc.gl_state.take() {
+        if let Some(c) = state.context_id.take() {
+            host.gl_destroy_context(pid_i32, c);
+        }
+        if let Some(s) = state.surface_id.take() {
+            host.gl_destroy_surface(pid_i32, s);
+        }
+    }
+    if proc.gl_binding.is_some() {
+        host.gl_unbind(pid_i32);
+        proc.gl_binding = None;
+    }
+    maybe_release_dri_render0(proc.pid);
     // Resolve relative paths against process CWD so the host sees absolute paths.
     // This is critical for posix_spawn with chdir file actions — the child's CWD
     // may differ from the initial data directory the host knows about.
@@ -4367,6 +4384,27 @@ pub fn sys_munmap(
         // Release ownership if the process also has no remaining Fb0 fds.
         if !proc_has_fb0_fd(proc) {
             maybe_release_fb0(proc.pid);
+        }
+    }
+
+    // /dev/dri/renderD128 cleanup: same shape as the Fb0 release above.
+    // The cmdbuf record on `gl_state` is cleared in lockstep so a
+    // subsequent GLIO_SUBMIT correctly errors with EINVAL.
+    let gl_release = if let Some(b) = proc.gl_binding {
+        let end = addr.saturating_add(len);
+        let b_end = b.cmdbuf_addr.saturating_add(b.cmdbuf_len);
+        addr <= b.cmdbuf_addr && end >= b_end
+    } else {
+        false
+    };
+    if gl_release {
+        proc.gl_binding = None;
+        if let Some(s) = proc.gl_state.as_mut() {
+            s.cmdbuf = None;
+        }
+        host.gl_unbind(proc.pid as i32);
+        if !proc_has_dri_render0_fd(proc) {
+            maybe_release_dri_render0(proc.pid);
         }
     }
 
@@ -16610,5 +16648,108 @@ mod tests {
                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
         assert_eq!(err, Errno::EINVAL);
         assert_eq!(h.gl_bind_calls.len(), 1);
+    }
+
+    // ----- Task A8: cleanup paths -----
+
+    #[test]
+    fn munmap_of_cmdbuf_clears_binding_and_unbinds_host() {
+        use core::sync::atomic::Ordering;
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        sys_munmap(&mut p, &mut h, addr, CMDBUF_LEN).unwrap();
+        assert!(p.gl_binding.is_none());
+        assert!(p.gl_state.as_ref().unwrap().cmdbuf.is_none());
+        assert_eq!(h.gl_unbind_calls, alloc::vec![p.pid as i32]);
+        // The fd is still open so ownership is retained until close.
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst),
+                   p.pid as i32);
+        // Closing then releases ownership.
+        sys_close(&mut p, &mut h, fd).unwrap();
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    #[test]
+    fn close_after_munmap_releases_gl_owner() {
+        use core::sync::atomic::Ordering;
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        // Closing first doesn't drop the owner — the mmap outlives the fd.
+        sys_close(&mut p, &mut h, fd).unwrap();
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst),
+                   p.pid as i32);
+        sys_munmap(&mut p, &mut h, addr, CMDBUF_LEN).unwrap();
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+        assert_eq!(h.gl_unbind_calls, alloc::vec![p.pid as i32]);
+    }
+
+    #[test]
+    fn execve_releases_gl_state_and_owner() {
+        use core::sync::atomic::Ordering;
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        let _addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        sys_execve(&mut p, &mut h, b"/bin/sh").unwrap();
+        assert!(p.gl_binding.is_none());
+        assert!(p.gl_state.is_none());
+        assert_eq!(h.gl_unbind_calls, alloc::vec![p.pid as i32]);
+        assert_eq!(h.gl_destroy_context_calls, alloc::vec![(p.pid as i32, 1u32)]);
+        assert_eq!(h.gl_destroy_surface_calls, alloc::vec![(p.pid as i32, 1u32)]);
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    #[test]
+    fn execve_without_gl_session_is_noop() {
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        sys_execve(&mut p, &mut h, b"/bin/sh").unwrap();
+        assert!(h.gl_unbind_calls.is_empty());
+        assert!(h.gl_destroy_context_calls.is_empty());
+        assert!(h.gl_destroy_surface_calls.is_empty());
+    }
+
+    #[test]
+    fn fork_child_image_does_not_inherit_gl_state() {
+        // The fork.rs deserialization sets `gl_binding: None` and
+        // `gl_state: None` for both the fork-child Process literal and
+        // the exec literal. Round-trip a parent with a live GL session
+        // and assert the child snapshot drops it. Mirrors the existing
+        // FB0 fork behaviour (see deserialize_fork_state in fork.rs).
+        use crate::fork::{serialize_fork_state, deserialize_fork_state};
+        let _g = gl_owner_reset();
+        let mut parent = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut parent, &mut h);
+        init_ctx_surface_and_make_current(&mut parent, &mut h, fd);
+
+        let mut buf = alloc::vec![0u8; 64 * 1024];
+        let n = serialize_fork_state(&parent, &mut buf).unwrap();
+        let child = deserialize_fork_state(&buf[..n], /* child_pid */ 12).unwrap();
+
+        assert!(child.gl_binding.is_none());
+        assert!(child.gl_state.is_none());
+        // Parent's session is untouched.
+        assert!(parent.gl_state.is_some());
     }
 }
