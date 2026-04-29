@@ -1,5 +1,5 @@
 {
-  "abi_version": 6,
+  "abi_version": 7,
   "asyncify_save_slots": [
     {
       "meaning": "parent TLS base (__tls_base) saved for child rewind",
@@ -133,24 +133,6 @@
       "kind": "func",
       "name": "__abi_version",
       "signature": "() -> (i32)"
-    },
-    {
-      "kind": "global",
-      "mutable": false,
-      "name": "__tls_align",
-      "type": "i64"
-    },
-    {
-      "kind": "global",
-      "mutable": true,
-      "name": "__tls_base",
-      "type": "i64"
-    },
-    {
-      "kind": "global",
-      "mutable": false,
-      "name": "__tls_size",
-      "type": "i64"
     },
     {
       "kind": "func",
@@ -691,6 +673,11 @@
       "kind": "func",
       "name": "kernel_inject_connection",
       "signature": "(i32,i32,i32,i32,i32,i32,i32) -> (i32)"
+    },
+    {
+      "kind": "func",
+      "name": "kernel_inject_mouse_event",
+      "signature": "(i32,i32,i32) -> ()"
     },
     {
       "kind": "func",

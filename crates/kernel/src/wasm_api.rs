@@ -1041,6 +1041,10 @@ pub extern "C" fn kernel_remove_process(pid: u32) -> i32 {
             }
             let _ = crate::process_table::FB0_OWNER
                 .compare_exchange(pid as i32, -1, Ordering::SeqCst, Ordering::SeqCst);
+            // /dev/input/mice cleanup: drop ownership and any pending
+            // packets so a successor open starts clean. No host-side
+            // unbind — the device is host→kernel only.
+            crate::syscalls::maybe_release_mice(pid);
             0
         }
         None => -(Errno::ESRCH as i32),
@@ -8604,6 +8608,23 @@ pub extern "C" fn kernel_pty_set_winsize(pty_idx: u32, rows: u32, cols: u32) -> 
     }
 
     0
+}
+
+// ---------------------------------------------------------------------------
+// /dev/input/mice — host-injected PS/2 packets
+// ---------------------------------------------------------------------------
+
+/// Push a single mouse motion / button event into the kernel-side queue
+/// for `/dev/input/mice`. The host calls this when a canvas mouse event
+/// fires; user processes consume the resulting PS/2 packets via `read()`.
+///
+/// `dx` / `dy` are in the PS/2 sense (positive dy = mouse moved up — the
+/// host inverts browser deltaY before calling). Out-of-range values are
+/// clamped to signed 8-bit by the kernel-side encoder. `buttons` is a
+/// bitmask: bit 0 = left, 1 = right, 2 = middle.
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_inject_mouse_event(dx: i32, dy: i32, buttons: u32) {
+    crate::mouse::inject_event(dx, dy, buttons);
 }
 
 // ---------------------------------------------------------------------------
