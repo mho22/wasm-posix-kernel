@@ -30,6 +30,9 @@ pub mod wakeup;
 #[cfg(any(target_arch = "wasm32", target_arch = "wasm64"))]
 pub mod wasm_api;
 
+#[cfg(test)]
+pub mod test_lock;
+
 // ---------------------------------------------------------------------------
 // Debug logging (temporary)
 // ---------------------------------------------------------------------------

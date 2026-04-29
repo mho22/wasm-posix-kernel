@@ -78,6 +78,7 @@ mod tests {
 
     #[test]
     fn test_push_and_drain() {
+        let _kernel_test_guard = crate::test_lock::lock();
         reset();
         // Enable centralized mode for test
         crate::set_kernel_mode(1);
@@ -106,6 +107,7 @@ mod tests {
 
     #[test]
     fn test_no_events_in_non_centralized_mode() {
+        let _kernel_test_guard = crate::test_lock::lock();
         reset();
         crate::set_kernel_mode(0);
 
@@ -118,6 +120,7 @@ mod tests {
 
     #[test]
     fn test_drain_respects_max() {
+        let _kernel_test_guard = crate::test_lock::lock();
         reset();
         crate::set_kernel_mode(1);
 
