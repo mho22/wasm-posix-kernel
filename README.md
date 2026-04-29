@@ -22,6 +22,8 @@ Real, unmodified software compiled to WebAssembly:
 | Vim | 9.1 | Full editor with ncurses terminal UI |
 | NetHack | 3.6.7 | Classic roguelike with curses UI |
 | fbDOOM | (maximevince) | id Software's DOOM via the kernel's `/dev/fb0` Linux fbdev surface |
+| SDL2 | 2.30.7 | Static `libSDL2.a` with custom `fbposix` video driver targeting `/dev/fb0` + `/dev/input/mice` + stdin |
+| ScummVM | 2.8.1 | LucasArts adventure-game interpreter (sky + scumm engines) — links unmodified against our SDL2 build |
 | Perl | 5.40 | Interpreter with core modules |
 | Ruby | 3.3 | Interpreter with core stdlib |
 | QuickJS-NG | 0.12 | ES2023 JavaScript engine + Node.js compat layer |

@@ -107,6 +107,13 @@ Browser fetch → Service Worker intercepts
 - Keyboard input: the demo page maps browser `KeyboardEvent.code` to AT-set-1 scancodes and feeds them through `appendStdinData(pid, …)`; fbDOOM-style software (which puts the tty into MEDIUMRAW mode) decodes those bytes as scancodes.
 - Limitations: no audio (`/dev/dsp`); no mouse; `fork` does not auto-bind the child; multi-buffering / vsync via `FBIOPAN_DISPLAY` is a no-op.
 
+### SDL2 (`fbposix` driver) and ScummVM
+
+- `examples/libs/sdl2/` builds a static `libSDL2.a` (2.30.x) with a custom in-tree video driver `fbposix` that maps onto `/dev/fb0` for video, stdin (raw termios + ANSI escape sequences) for keyboard, and `/dev/input/mice` for mouse. `SDL_INIT_VIDEO` selects it automatically when the kernel exposes those devices.
+- `examples/libs/scummvm/` builds ScummVM 2.8.x against this SDL2 with the `sky` and `scumm` engines enabled.
+- The demo page at `examples/browser/pages/scummvm/` boots ScummVM with `--auto-detect` against a chosen game directory; it captures keyboard via `appendStdinData(pid, …)` (terminfo-style escape sequences) and mouse via `kernel.injectMouseEvent(pid, dx, -dy, btns)` after the user clicks the canvas to engage pointer-lock.
+- Audio is silent until `/dev/dsp` ships from the audio subsystem; SDL2 falls back to `audio-dummy` automatically.
+
 ## Browser Demos
 
 Located in `examples/browser/pages/`:
@@ -129,6 +136,7 @@ Located in `examples/browser/pages/`:
 | mariadb-test | MariaDB + mysqltest | dinit + spawn | Playwright-driven mysql-test runner |
 | benchmark | (per-suite) | legacy spawn | Micro-benchmarks + WordPress + Erlang ring |
 | doom | fbDOOM | legacy spawn | `/dev/fb0` framebuffer + canvas renderer + keyboard via stdin |
+| scummvm | ScummVM 2.8 | legacy spawn | SDL2 (`fbposix` driver) + canvas + keyboard (escape sequences) + pointer-lock mouse |
 
 The "Boot pattern" column reflects how the demo enters the kernel:
 - **`kernel.boot`** — `kernelOwnedFs: true`, exec the language interpreter as the first process.

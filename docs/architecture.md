@@ -392,6 +392,14 @@ Cleanup paths (`munmap`, last `close` once unmapped, process exit, `exec`) clear
 
 ABI version bumped 5 → 6 to capture the new `repr(C)` structs `FbBitfield`, `FbVarScreenInfo`, `FbFixScreenInfo`. See `crates/shared/src/lib.rs::fbdev` and `abi/snapshot.json`.
 
+## SDL2 (`fbposix` driver)
+
+The kernel doesn't ship an SDL2 library; user-space does. We vendor SDL2 (2.30.x) with a custom in-tree video driver `fbposix` (under `examples/libs/sdl2/fbposix/`, copied into the SDL2 source at build time). `fbposix` opens `/dev/fb0`, mmaps the surface, and pumps events from `STDIN_FILENO` (raw termios, ANSI escape sequences) and `/dev/input/mice` (PS/2 frames). The software renderer hands pixels back to SDL2 zero-copy when the window is 640×400; otherwise a per-window backing buffer is nearest-neighbor scaled onto the framebuffer on `UpdateWindowFramebuffer`.
+
+This pattern composes the existing kernel surface (`/dev/fb0`, stdin, `/dev/input/mice`) into the SDL2 ABI used by ScummVM and similar applications without introducing new kernel ABI. Audio is routed through SDL2's upstream `dsp` driver against `/dev/dsp` (delivered separately by the audio subsystem); SDL2 degrades cleanly to silent if `/dev/dsp` is absent.
+
+See `docs/plans/2026-04-29-sdl2-scummvm-design.md` for the full design and `examples/libs/sdl2/build-sdl2.sh` for the cross-compile pipeline.
+
 ## Signal Subsystem
 
 Signals are delivered at syscall boundaries. When a process has a pending signal:
