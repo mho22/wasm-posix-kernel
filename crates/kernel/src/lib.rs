@@ -31,7 +31,7 @@ pub mod wakeup;
 pub mod wasm_api;
 
 #[cfg(test)]
-pub mod test_lock;
+pub(crate) mod test_lock;
 
 // ---------------------------------------------------------------------------
 // Debug logging (temporary)

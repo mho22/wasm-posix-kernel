@@ -8621,7 +8621,7 @@ mod tests {
 
     #[test]
     fn test_open_close_cycle() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8636,7 +8636,7 @@ mod tests {
 
     #[test]
     fn test_dup_shares_ofd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8651,7 +8651,7 @@ mod tests {
 
     #[test]
     fn test_dup2_replaces_target() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8667,7 +8667,7 @@ mod tests {
 
     #[test]
     fn test_dup2_same_fd_noop() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8685,7 +8685,7 @@ mod tests {
 
     #[test]
     fn test_pipe_read_write() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
 
@@ -8696,7 +8696,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_dupfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8709,7 +8709,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8729,7 +8729,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_getfl_setfl() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8750,7 +8750,7 @@ mod tests {
 
     #[test]
     fn test_lseek() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8767,7 +8767,7 @@ mod tests {
 
     #[test]
     fn test_lseek_pipe_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (read_fd, _write_fd) = sys_pipe(&mut proc).unwrap();
@@ -8778,7 +8778,7 @@ mod tests {
 
     #[test]
     fn test_read_write_only_fd_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8791,7 +8791,7 @@ mod tests {
 
     #[test]
     fn test_write_read_only_fd_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8803,7 +8803,7 @@ mod tests {
 
     #[test]
     fn test_fstat_regular_file() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8815,7 +8815,7 @@ mod tests {
 
     #[test]
     fn test_fstat_pipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8827,7 +8827,7 @@ mod tests {
 
     #[test]
     fn test_pipe_write_then_read() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -8846,7 +8846,7 @@ mod tests {
 
     #[test]
     fn test_stat_returns_file_info() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let stat = sys_stat(&mut proc, &mut host, b"/tmp/file").unwrap();
@@ -8856,7 +8856,7 @@ mod tests {
 
     #[test]
     fn test_lstat_returns_symlink_info() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let stat = sys_lstat(&mut proc, &mut host, b"/tmp/link").unwrap();
@@ -8865,7 +8865,7 @@ mod tests {
 
     #[test]
     fn test_stat_resolves_relative_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         proc.cwd = b"/home/user".to_vec();
@@ -8876,7 +8876,7 @@ mod tests {
 
     #[test]
     fn test_mkdir_delegates_to_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_mkdir(&mut proc, &mut host, b"/tmp/newdir", 0o755).unwrap();
@@ -8884,7 +8884,7 @@ mod tests {
 
     #[test]
     fn test_unlink_delegates_to_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_unlink(&mut proc, &mut host, b"/tmp/file").unwrap();
@@ -8892,7 +8892,7 @@ mod tests {
 
     #[test]
     fn test_readlink_returns_target() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 256];
@@ -8902,7 +8902,7 @@ mod tests {
 
     #[test]
     fn test_rename_delegates_to_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_rename(&mut proc, &mut host, b"/tmp/old", b"/tmp/new").unwrap();
@@ -8910,7 +8910,7 @@ mod tests {
 
     #[test]
     fn test_access_delegates_to_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_access(&mut proc, &mut host, b"/tmp/file", 0).unwrap(); // F_OK
@@ -8918,7 +8918,7 @@ mod tests {
 
     #[test]
     fn test_symlink_target_not_resolved() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // symlink target is stored as-is, only linkpath is resolved
@@ -8927,7 +8927,7 @@ mod tests {
 
     #[test]
     fn test_getcwd_returns_initial_cwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let mut buf = [0u8; 256];
         let n = sys_getcwd(&proc, &mut buf).unwrap();
@@ -8937,7 +8937,7 @@ mod tests {
 
     #[test]
     fn test_chdir_changes_cwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_chdir(&mut proc, &mut host, b"/tmp").unwrap();
@@ -8948,7 +8948,7 @@ mod tests {
 
     #[test]
     fn test_chdir_relative_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // First chdir to /tmp (ends with "tmp", so MockHostIO returns S_IFDIR)
@@ -8962,7 +8962,7 @@ mod tests {
 
     #[test]
     fn test_chdir_rejects_non_directory() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Path "file.txt" doesn't end with dir/tmp, so MockHostIO returns S_IFREG
@@ -8972,7 +8972,7 @@ mod tests {
 
     #[test]
     fn test_getcwd_erange_when_buffer_too_small() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_chdir(&mut proc, &mut host, b"/tmp").unwrap();
@@ -8983,7 +8983,7 @@ mod tests {
 
     #[test]
     fn test_opendir_closedir_cycle() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let dh = sys_opendir(&mut proc, &mut host, b"/tmp").unwrap();
@@ -8993,7 +8993,7 @@ mod tests {
 
     #[test]
     fn test_closedir_invalid_handle() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_closedir(&mut proc, &mut host, 99);
@@ -9002,7 +9002,7 @@ mod tests {
 
     #[test]
     fn test_closedir_already_closed() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let dh = sys_opendir(&mut proc, &mut host, b"/tmp").unwrap();
@@ -9014,7 +9014,7 @@ mod tests {
 
     #[test]
     fn test_readdir_returns_entry_then_done() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let dh = sys_opendir(&mut proc, &mut host, b"/tmp").unwrap();
@@ -9045,7 +9045,7 @@ mod tests {
 
     #[test]
     fn test_readdir_invalid_handle() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut dirent_buf = [0u8; 16];
@@ -9056,7 +9056,7 @@ mod tests {
 
     #[test]
     fn test_dir_stream_slot_reuse() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let dh0 = sys_opendir(&mut proc, &mut host, b"/tmp").unwrap();
@@ -9070,7 +9070,7 @@ mod tests {
 
     #[test]
     fn test_rewinddir_resets_position() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         host.dir_entry_count = 2; // two entries: test.txt, foo.txt
@@ -9110,7 +9110,7 @@ mod tests {
 
     #[test]
     fn test_telldir_returns_position() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         host.dir_entry_count = 3;
@@ -9135,7 +9135,7 @@ mod tests {
 
     #[test]
     fn test_seekdir_skips_entries() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         host.dir_entry_count = 4; // test.txt, foo.txt, bar.txt, baz.txt
@@ -9167,7 +9167,7 @@ mod tests {
 
     #[test]
     fn test_rewinddir_invalid_handle() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_rewinddir(&mut proc, &mut host, 99);
@@ -9176,49 +9176,49 @@ mod tests {
 
     #[test]
     fn test_getpid_returns_pid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(42);
         assert_eq!(sys_getpid(&proc), 42);
     }
 
     #[test]
     fn test_getppid_returns_zero_for_init() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getppid(&proc), 0);
     }
 
     #[test]
     fn test_getuid_returns_default() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getuid(&proc), 0);
     }
 
     #[test]
     fn test_geteuid_returns_default() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_geteuid(&proc), 0);
     }
 
     #[test]
     fn test_getgid_returns_default() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getgid(&proc), 0);
     }
 
     #[test]
     fn test_getegid_returns_default() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getegid(&proc), 0);
     }
 
     #[test]
     fn test_exit_closes_fds_and_sets_state() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -9239,7 +9239,7 @@ mod tests {
 
     #[test]
     fn test_exit_with_zero_status() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_exit(&mut proc, &mut host, 0);
@@ -9249,7 +9249,7 @@ mod tests {
 
     #[test]
     fn test_kill_marks_signal_pending() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_kill(&mut proc, &mut host, 1, 2).unwrap(); // SIGINT=2
@@ -9258,7 +9258,7 @@ mod tests {
 
     #[test]
     fn test_kill_sig_zero_is_noop() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_kill(&mut proc, &mut host, 1, 0).unwrap();
@@ -9267,7 +9267,7 @@ mod tests {
 
     #[test]
     fn test_kill_invalid_signal() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_kill(&mut proc, &mut host, 1, 100);
@@ -9276,7 +9276,7 @@ mod tests {
 
     #[test]
     fn test_kill_remote_pid_calls_host_kill() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_kill(&mut proc, &mut host, 2, 15);
@@ -9286,7 +9286,7 @@ mod tests {
 
     #[test]
     fn test_kill_self_raises_locally() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_kill(&mut proc, &mut host, 1, 2);
@@ -9296,7 +9296,7 @@ mod tests {
 
     #[test]
     fn test_kill_pid_zero_raises_locally() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_kill(&mut proc, &mut host, 0, 2);
@@ -9306,7 +9306,7 @@ mod tests {
 
     #[test]
     fn test_kill_sig_zero_remote_delegates_to_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // sig=0 to remote pid should delegate to host for existence check
@@ -9317,7 +9317,7 @@ mod tests {
 
     #[test]
     fn test_sigaction_set_ignore() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (old_h, old_f, old_m) = sys_sigaction(&mut proc, 2, 1, 0, 0).unwrap(); // SIGINT, SIG_IGN
         assert_eq!(old_h, 0); // was SIG_DFL
@@ -9329,7 +9329,7 @@ mod tests {
 
     #[test]
     fn test_sigaction_with_flags_and_mask() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::signal::SA_RESTART;
         let mut proc = Process::new(1);
         let _ = sys_sigaction(&mut proc, 2, 42, SA_RESTART, 0x04).unwrap();
@@ -9341,7 +9341,7 @@ mod tests {
 
     #[test]
     fn test_sigaction_cannot_change_sigkill() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_sigaction(&mut proc, 9, 1, 0, 0); // SIGKILL, SIG_IGN
         assert_eq!(result, Err(Errno::EINVAL));
@@ -9349,7 +9349,7 @@ mod tests {
 
     #[test]
     fn test_signal_set_ignore() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // signal(SIGUSR1, SIG_IGN) — returns old handler (SIG_DFL=0)
         let result = sys_signal(&mut proc, 10, 1); // SIGUSR1=10, SIG_IGN=1
@@ -9358,7 +9358,7 @@ mod tests {
 
     #[test]
     fn test_signal_set_handler() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // Set handler to function pointer 42
         let result = sys_signal(&mut proc, 10, 42); // SIGUSR1=10
@@ -9370,7 +9370,7 @@ mod tests {
 
     #[test]
     fn test_signal_sigkill_immutable() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_signal(&mut proc, 9, 1); // SIGKILL, SIG_IGN
         assert_eq!(result, Err(Errno::EINVAL));
@@ -9378,7 +9378,7 @@ mod tests {
 
     #[test]
     fn test_signal_sigstop_immutable() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_signal(&mut proc, 19, 1); // SIGSTOP=19, SIG_IGN
         assert_eq!(result, Err(Errno::EINVAL));
@@ -9386,7 +9386,7 @@ mod tests {
 
     #[test]
     fn test_sigprocmask_block() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let old = sys_sigprocmask(&mut proc, 0, crate::signal::sig_bit(2)).unwrap(); // SIG_BLOCK SIGINT
         assert_eq!(old, 0);
@@ -9395,7 +9395,7 @@ mod tests {
 
     #[test]
     fn test_sigprocmask_cannot_block_sigkill() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_sigprocmask(&mut proc, 2, crate::signal::sig_bit(9) | crate::signal::sig_bit(2)).unwrap(); // SIG_SETMASK SIGKILL+SIGINT
         assert!(!proc.signals.is_blocked(9)); // SIGKILL cannot be blocked
@@ -9404,7 +9404,7 @@ mod tests {
 
     #[test]
     fn test_raise_is_kill_to_self() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(42);
         let mut host = MockHostIO::new();
         sys_raise(&mut proc, &mut host, 15).unwrap(); // SIGTERM
@@ -9413,7 +9413,7 @@ mod tests {
 
     #[test]
     fn test_deliver_signal_marks_pending() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // Simulate what kernel_deliver_signal does
         proc.signals.raise(15); // SIGTERM
@@ -9422,7 +9422,7 @@ mod tests {
 
     #[test]
     fn test_signal_delivery_after_unblock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // Reproduce the sigreturn test flow:
         // 1. Register handler for SIGINT
         // 2. Block SIGINT
@@ -9474,7 +9474,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_setlk_and_getlk() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_RDWR | O_CREAT, 0o644).unwrap();
@@ -9507,7 +9507,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_unlock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_RDWR | O_CREAT, 0o644).unwrap();
@@ -9538,7 +9538,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_rdlck_requires_read_access() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_WRONLY | O_CREAT, 0o644).unwrap();
@@ -9558,7 +9558,7 @@ mod tests {
 
     #[test]
     fn test_close_releases_fcntl_locks() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/lockfile", O_RDWR | O_CREAT, 0o644).unwrap();
@@ -9578,7 +9578,7 @@ mod tests {
 
     #[test]
     fn test_exit_releases_fcntl_locks() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/lockfile", O_RDWR | O_CREAT, 0o644).unwrap();
@@ -9600,7 +9600,7 @@ mod tests {
 
     #[test]
     fn test_clock_gettime() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let mut host = MockHostIO::new();
         let ts = sys_clock_gettime(&proc, &mut host, 0).unwrap();
@@ -9610,7 +9610,7 @@ mod tests {
 
     #[test]
     fn test_nanosleep_rejects_negative() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let mut host = MockHostIO::new();
         let req = WasmTimespec { tv_sec: -1, tv_nsec: 0 };
@@ -9619,7 +9619,7 @@ mod tests {
 
     #[test]
     fn test_nanosleep_rejects_invalid_nsec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let mut host = MockHostIO::new();
         let req = WasmTimespec { tv_sec: 0, tv_nsec: 1_000_000_000 };
@@ -9628,7 +9628,7 @@ mod tests {
 
     #[test]
     fn test_nanosleep_valid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let mut host = MockHostIO::new();
         let req = WasmTimespec { tv_sec: 1, tv_nsec: 500_000_000 };
@@ -9637,14 +9637,14 @@ mod tests {
 
     #[test]
     fn test_isatty_stdin() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_isatty(&proc, 0), Ok(1));
     }
 
     #[test]
     fn test_isatty_regular_file() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_RDONLY, 0o644).unwrap();
@@ -9653,14 +9653,14 @@ mod tests {
 
     #[test]
     fn test_isatty_invalid_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_isatty(&proc, 99), Err(Errno::EBADF));
     }
 
     #[test]
     fn test_setenv_getenv() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setenv(&mut proc, b"HOME", b"/home/user", true).unwrap();
         let mut buf = [0u8; 256];
@@ -9670,7 +9670,7 @@ mod tests {
 
     #[test]
     fn test_setenv_no_overwrite() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setenv(&mut proc, b"HOME", b"/home/user", true).unwrap();
         sys_setenv(&mut proc, b"HOME", b"/other", false).unwrap();
@@ -9681,7 +9681,7 @@ mod tests {
 
     #[test]
     fn test_setenv_overwrite() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setenv(&mut proc, b"HOME", b"/home/user", true).unwrap();
         sys_setenv(&mut proc, b"HOME", b"/other", true).unwrap();
@@ -9692,7 +9692,7 @@ mod tests {
 
     #[test]
     fn test_unsetenv() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setenv(&mut proc, b"HOME", b"/home/user", true).unwrap();
         sys_unsetenv(&mut proc, b"HOME").unwrap();
@@ -9702,7 +9702,7 @@ mod tests {
 
     #[test]
     fn test_getenv_not_found() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let mut buf = [0u8; 256];
         assert_eq!(sys_getenv(&proc, b"NONEXIST", &mut buf), Err(Errno::ENOENT));
@@ -9710,21 +9710,21 @@ mod tests {
 
     #[test]
     fn test_setenv_rejects_empty_name() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         assert_eq!(sys_setenv(&mut proc, b"", b"value", true), Err(Errno::EINVAL));
     }
 
     #[test]
     fn test_setenv_rejects_name_with_equals() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         assert_eq!(sys_setenv(&mut proc, b"A=B", b"value", true), Err(Errno::EINVAL));
     }
 
     #[test]
     fn test_mmap_anonymous() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let addr = sys_mmap(&mut proc, &mut host, 0, 4096, 3, 0x22, -1, 0).unwrap(); // PROT_READ|WRITE, MAP_PRIVATE|ANON
@@ -9733,7 +9733,7 @@ mod tests {
 
     #[test]
     fn test_mmap_file_backed_private() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Open a file to get a valid fd
@@ -9745,7 +9745,7 @@ mod tests {
 
     #[test]
     fn test_mmap_file_backed_bad_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // MAP_PRIVATE with invalid fd should fail
@@ -9755,7 +9755,7 @@ mod tests {
 
     #[test]
     fn test_mmap_file_backed_shared() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Open a file to get a valid fd
@@ -9767,7 +9767,7 @@ mod tests {
 
     #[test]
     fn test_munmap() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let addr = sys_mmap(&mut proc, &mut host, 0, 4096, 3, 0x22, -1, 0).unwrap();
@@ -9776,7 +9776,7 @@ mod tests {
 
     #[test]
     fn test_munmap_invalid_address_minus_one() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // munmap((void*)-1, 1) — address 0xFFFFFFFF is not page-aligned, should return EINVAL
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -9785,7 +9785,7 @@ mod tests {
 
     #[test]
     fn test_munmap_address_overflow() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // Page-aligned address where addr+len overflows usize
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -9795,7 +9795,7 @@ mod tests {
 
     #[test]
     fn test_munmap_unaligned_address() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // munmap with non-page-aligned address should return EINVAL
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -9804,7 +9804,7 @@ mod tests {
 
     #[test]
     fn test_munmap_zero_length() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         assert_eq!(sys_munmap(&mut proc, &mut host, 0x10000, 0), Err(Errno::EINVAL));
@@ -9812,7 +9812,7 @@ mod tests {
 
     #[test]
     fn test_brk_query() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let brk = sys_brk(&mut proc, 0);
         assert!(brk > 0);
@@ -9820,7 +9820,7 @@ mod tests {
 
     #[test]
     fn test_brk_set() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let initial = sys_brk(&mut proc, 0);
         let new_brk = sys_brk(&mut proc, initial + 4096);
@@ -9829,14 +9829,14 @@ mod tests {
 
     #[test]
     fn test_mprotect_succeeds_noop() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_mprotect(&proc, 0, 4096, 3), Ok(()));
     }
 
     #[test]
     fn test_socket_creation() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -9849,7 +9849,7 @@ mod tests {
 
     #[test]
     fn test_socket_unsupported_domain() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_socket(&mut proc, &mut host, 999, 1, 0);
@@ -9858,7 +9858,7 @@ mod tests {
 
     #[test]
     fn test_socket_unsupported_type() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::AF_UNIX;
@@ -9868,7 +9868,7 @@ mod tests {
 
     #[test]
     fn test_socketpair_unix_stream() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -9896,7 +9896,7 @@ mod tests {
 
     #[test]
     fn test_socketpair_close_one_end() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -9916,7 +9916,7 @@ mod tests {
 
     #[test]
     fn test_write_broken_pipe_raises_sigpipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
@@ -9932,7 +9932,7 @@ mod tests {
 
     #[test]
     fn test_write_shutdown_socket_raises_sigpipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -9947,7 +9947,7 @@ mod tests {
 
     #[test]
     fn test_socketpair_close_both_frees_pipes() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -9975,7 +9975,7 @@ mod tests {
 
     #[test]
     fn test_socketpair_uses_global_pipes() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10004,7 +10004,7 @@ mod tests {
 
     #[test]
     fn test_socketpair_not_unix() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10014,7 +10014,7 @@ mod tests {
 
     #[test]
     fn test_shutdown_read() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10027,7 +10027,7 @@ mod tests {
 
     #[test]
     fn test_shutdown_write() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10039,7 +10039,7 @@ mod tests {
 
     #[test]
     fn test_send_recv() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10056,7 +10056,7 @@ mod tests {
 
     #[test]
     fn test_recv_msg_peek() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10083,7 +10083,7 @@ mod tests {
 
     #[test]
     fn test_recv_msg_waitall() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10102,7 +10102,7 @@ mod tests {
 
     #[test]
     fn test_recv_msg_waitall_peer_closed() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10121,7 +10121,7 @@ mod tests {
 
     #[test]
     fn test_send_msg_nosignal() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10138,7 +10138,7 @@ mod tests {
 
     #[test]
     fn test_send_not_connected() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10149,7 +10149,7 @@ mod tests {
 
     #[test]
     fn test_getsockopt_so_type() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10160,7 +10160,7 @@ mod tests {
 
     #[test]
     fn test_getsockopt_so_domain() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10171,7 +10171,7 @@ mod tests {
 
     #[test]
     fn test_getsockopt_not_socket() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         use wasm_posix_shared::socket::*;
         let result = sys_getsockopt(&mut proc, 0, SOL_SOCKET, SO_TYPE);
@@ -10180,7 +10180,7 @@ mod tests {
 
     #[test]
     fn test_setsockopt_tcp_nodelay() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10192,7 +10192,7 @@ mod tests {
 
     #[test]
     fn test_setsockopt_so_linger() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10204,7 +10204,7 @@ mod tests {
 
     #[test]
     fn test_setsockopt_so_broadcast() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10214,7 +10214,7 @@ mod tests {
 
     #[test]
     fn test_getsockopt_default_tcp_nodelay() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10225,7 +10225,7 @@ mod tests {
 
     #[test]
     fn test_getsockopt_tcp_info_established() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10245,7 +10245,7 @@ mod tests {
 
     #[test]
     fn test_getsockopt_tcp_info_listening() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10260,7 +10260,7 @@ mod tests {
 
     #[test]
     fn test_getsockopt_tcp_info_not_socket() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let result = sys_getsockopt_tcp_info(&proc, 0);
         assert_eq!(result, Err(Errno::ENOTSOCK));
@@ -10268,7 +10268,7 @@ mod tests {
 
     #[test]
     fn test_setsockopt_tcp_keepalive_options() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10289,7 +10289,7 @@ mod tests {
 
     #[test]
     fn test_shutdown_not_socket() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10299,7 +10299,7 @@ mod tests {
 
     #[test]
     fn test_bind_inet_succeeds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10314,7 +10314,7 @@ mod tests {
 
     #[test]
     fn test_bind_enotsock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_bind(&mut proc, &mut host, 0, &[0u8; 16]);
@@ -10323,7 +10323,7 @@ mod tests {
 
     #[test]
     fn test_bind_unix_stream() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let _lock = UNIX_REGISTRY_LOCK.lock().unwrap();
         let mut proc = Process::new(9010);
         let mut host = MockHostIO::new();
@@ -10353,7 +10353,7 @@ mod tests {
 
     #[test]
     fn test_bind_unix_duplicate_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let _lock = UNIX_REGISTRY_LOCK.lock().unwrap();
         let mut proc = Process::new(9011);
         let mut host = MockHostIO::new();
@@ -10378,7 +10378,7 @@ mod tests {
 
     #[test]
     fn test_listen_after_bind_succeeds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10393,7 +10393,7 @@ mod tests {
 
     #[test]
     fn test_accept_eagain_on_empty_backlog() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10408,7 +10408,7 @@ mod tests {
 
     #[test]
     fn test_connect_econnrefused() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10419,7 +10419,7 @@ mod tests {
 
     #[test]
     fn test_poll_regular_file_always_ready() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::WasmPollFd;
@@ -10433,7 +10433,7 @@ mod tests {
 
     #[test]
     fn test_poll_pipe_readable() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::WasmPollFd;
@@ -10458,7 +10458,7 @@ mod tests {
 
     #[test]
     fn test_poll_pipe_writable() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::WasmPollFd;
@@ -10473,7 +10473,7 @@ mod tests {
 
     #[test]
     fn test_poll_pipe_hangup() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::WasmPollFd;
@@ -10490,7 +10490,7 @@ mod tests {
 
     #[test]
     fn test_poll_invalid_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::WasmPollFd;
@@ -10503,7 +10503,7 @@ mod tests {
 
     #[test]
     fn test_poll_negative_fd_ignored() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::WasmPollFd;
@@ -10516,7 +10516,7 @@ mod tests {
 
     #[test]
     fn test_poll_socket_pair() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::WasmPollFd;
@@ -10545,7 +10545,7 @@ mod tests {
 
     #[test]
     fn test_poll_multiple_fds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::WasmPollFd;
@@ -10565,7 +10565,7 @@ mod tests {
 
     #[test]
     fn test_lseek_seek_end_on_pipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (read_fd, _write_fd) = sys_pipe(&mut proc).unwrap();
@@ -10576,7 +10576,7 @@ mod tests {
 
     #[test]
     fn test_pread_espipe_on_pipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (read_fd, _write_fd) = sys_pipe(&mut proc).unwrap();
@@ -10587,7 +10587,7 @@ mod tests {
 
     #[test]
     fn test_pwrite_espipe_on_pipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (_read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
@@ -10597,7 +10597,7 @@ mod tests {
 
     #[test]
     fn test_pread_einval_on_negative_offset() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/f", O_RDWR | O_CREAT, 0o644).unwrap();
@@ -10608,7 +10608,7 @@ mod tests {
 
     #[test]
     fn test_pwrite_einval_on_negative_offset() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/f", O_RDWR | O_CREAT, 0o644).unwrap();
@@ -10618,7 +10618,7 @@ mod tests {
 
     #[test]
     fn test_pread_espipe_on_socket() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10630,7 +10630,7 @@ mod tests {
 
     #[test]
     fn test_time_returns_positive() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let t = sys_time(&mut proc, &mut host).unwrap();
@@ -10640,7 +10640,7 @@ mod tests {
 
     #[test]
     fn test_gettimeofday() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (sec, usec) = sys_gettimeofday(&mut proc, &mut host).unwrap();
@@ -10650,7 +10650,7 @@ mod tests {
 
     #[test]
     fn test_usleep() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // MockHostIO nanosleep is a no-op, so this should succeed
@@ -10659,7 +10659,7 @@ mod tests {
 
     #[test]
     fn test_openat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::flags::AT_FDCWD;
@@ -10671,7 +10671,7 @@ mod tests {
 
     #[test]
     fn test_openat_absolute_path_ignores_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Absolute path should ignore dirfd
@@ -10682,7 +10682,7 @@ mod tests {
 
     #[test]
     fn test_openat_dirfd_enotdir() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 0 is stdin (CharDevice, not Directory)
@@ -10692,7 +10692,7 @@ mod tests {
 
     #[test]
     fn test_fstatat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_fstatat(&mut proc, &mut host, AT_FDCWD, b"/tmp/test", 0);
@@ -10701,7 +10701,7 @@ mod tests {
 
     #[test]
     fn test_fstatat_absolute_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Absolute path ignores dirfd
@@ -10711,7 +10711,7 @@ mod tests {
 
     #[test]
     fn test_fstatat_symlink_nofollow() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_fstatat(&mut proc, &mut host, AT_FDCWD, b"/tmp/link", AT_SYMLINK_NOFOLLOW);
@@ -10723,7 +10723,7 @@ mod tests {
 
     #[test]
     fn test_fstatat_relative_invalid_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 5 doesn't exist, should get EBADF
@@ -10733,7 +10733,7 @@ mod tests {
 
     #[test]
     fn test_unlinkat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_unlinkat(&mut proc, &mut host, AT_FDCWD, b"/tmp/test", 0);
@@ -10742,7 +10742,7 @@ mod tests {
 
     #[test]
     fn test_unlinkat_removedir() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_unlinkat(&mut proc, &mut host, AT_FDCWD, b"/tmp/dir", AT_REMOVEDIR);
@@ -10751,7 +10751,7 @@ mod tests {
 
     #[test]
     fn test_unlinkat_relative_invalid_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 5 doesn't exist, should get EBADF
@@ -10761,7 +10761,7 @@ mod tests {
 
     #[test]
     fn test_mkdirat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_mkdirat(&mut proc, &mut host, AT_FDCWD, b"/tmp/newdir", 0o755);
@@ -10770,7 +10770,7 @@ mod tests {
 
     #[test]
     fn test_mkdirat_relative_invalid_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 5 doesn't exist, should get EBADF
@@ -10780,7 +10780,7 @@ mod tests {
 
     #[test]
     fn test_renameat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_renameat(&mut proc, &mut host, AT_FDCWD, b"/tmp/old", AT_FDCWD, b"/tmp/new");
@@ -10789,7 +10789,7 @@ mod tests {
 
     #[test]
     fn test_renameat_absolute_paths() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Both paths absolute, dirfds are ignored
@@ -10799,7 +10799,7 @@ mod tests {
 
     #[test]
     fn test_renameat_relative_invalid_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Old path relative with non-existent dirfd
@@ -10809,7 +10809,7 @@ mod tests {
 
     #[test]
     fn test_tcgetattr_returns_terminal_state() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 60];
         let result = sys_tcgetattr(&mut proc, 0, &mut buf);
@@ -10821,7 +10821,7 @@ mod tests {
 
     #[test]
     fn test_tcgetattr_enotty_for_regular_file() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_RDONLY, 0).unwrap();
@@ -10832,7 +10832,7 @@ mod tests {
 
     #[test]
     fn test_tcsetattr_modifies_terminal_state() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 60];
         sys_tcgetattr(&mut proc, 0, &mut buf).unwrap();
@@ -10852,7 +10852,7 @@ mod tests {
 
     #[test]
     fn test_ioctl_tiocgwinsz() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 8];
         let result = sys_ioctl(&mut proc, 0, 0x5413, &mut buf); // TIOCGWINSZ
@@ -10865,7 +10865,7 @@ mod tests {
 
     #[test]
     fn test_ioctl_tiocswinsz() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 8];
         buf[0..2].copy_from_slice(&120u16.to_le_bytes()); // rows
@@ -10883,7 +10883,7 @@ mod tests {
 
     #[test]
     fn test_ioctl_unsupported_returns_enotty() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 8];
         let result = sys_ioctl(&mut proc, 0, 0x9999, &mut buf);
@@ -10892,7 +10892,7 @@ mod tests {
 
     #[test]
     fn test_ioctl_fionbio_set_nonblock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // Set O_NONBLOCK via FIONBIO on stdout (fd 1)
         let mut buf = 1i32.to_le_bytes();
@@ -10909,7 +10909,7 @@ mod tests {
 
     #[test]
     fn test_ioctl_fioclex_fionclex() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 4];
         // Set FD_CLOEXEC via FIOCLEX on fd 0
@@ -10922,7 +10922,7 @@ mod tests {
 
     #[test]
     fn test_ioctl_fionread_pipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
         let mut host = MockHostIO::new();
@@ -10937,7 +10937,7 @@ mod tests {
 
     #[test]
     fn test_ioctl_fionread_regular() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // FIONREAD on a CharDevice returns 0
         let mut buf = [0u8; 4];
@@ -10950,7 +10950,7 @@ mod tests {
 
     #[test]
     fn test_send_recv_msg_oob() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -10985,7 +10985,7 @@ mod tests {
 
     #[test]
     fn test_recv_msg_oob_no_data() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -11002,7 +11002,7 @@ mod tests {
 
     #[test]
     fn test_prctl_set_get_name() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 16];
         buf[..5].copy_from_slice(b"hello");
@@ -11015,7 +11015,7 @@ mod tests {
 
     #[test]
     fn test_prctl_unknown_is_noop() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 16];
         assert!(sys_prctl(&mut proc, 999, 0, &mut buf).is_ok());
@@ -11023,7 +11023,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_f_getown_default_zero() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_fcntl(&mut proc, 0, 9, 0); // F_GETOWN
         assert_eq!(result, Ok(0));
@@ -11031,7 +11031,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_f_setown_and_getown() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // Set owner to pid 42
         let result = sys_fcntl(&mut proc, 0, 8, 42); // F_SETOWN
@@ -11043,7 +11043,7 @@ mod tests {
 
     #[test]
     fn test_open_nofollow_passed_through() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::flags::O_NOFOLLOW;
@@ -11059,7 +11059,7 @@ mod tests {
 
     #[test]
     fn test_pipe_read_nonblock_eagain() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (read_fd, _write_fd) = sys_pipe(&mut proc).unwrap();
@@ -11073,7 +11073,7 @@ mod tests {
 
     #[test]
     fn test_pipe_read_nonblock_with_data() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
@@ -11089,7 +11089,7 @@ mod tests {
 
     #[test]
     fn test_pipe_read_eof_when_write_end_closed() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
@@ -11104,7 +11104,7 @@ mod tests {
 
     #[test]
     fn test_pipe_write_nonblock_eagain_when_full() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (_read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
@@ -11120,7 +11120,7 @@ mod tests {
 
     #[test]
     fn test_blocking_pipe_read_eintr_on_signal() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (read_fd, _write_fd) = sys_pipe(&mut proc).unwrap();
@@ -11136,7 +11136,7 @@ mod tests {
 
     #[test]
     fn test_blocking_pipe_write_eintr_on_signal() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (_read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
@@ -11157,14 +11157,14 @@ mod tests {
 
     #[test]
     fn test_umask_default() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(proc.umask, 0o022);
     }
 
     #[test]
     fn test_umask_set_and_get_old() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let old = sys_umask(&mut proc, 0o077);
         assert_eq!(old, 0o022); // previous default
@@ -11174,7 +11174,7 @@ mod tests {
 
     #[test]
     fn test_umask_masks_high_bits() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let old = sys_umask(&mut proc, 0o7777); // only 0o777 stored
         assert_eq!(old, 0o022);
@@ -11185,7 +11185,7 @@ mod tests {
 
     #[test]
     fn test_uname_returns_fields() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut buf = [0u8; 325];
         let result = sys_uname(&mut buf);
         assert!(result.is_ok());
@@ -11200,7 +11200,7 @@ mod tests {
 
     #[test]
     fn test_uname_buffer_too_small() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut buf = [0u8; 100];
         let result = sys_uname(&mut buf);
         assert_eq!(result, Err(Errno::EINVAL));
@@ -11210,26 +11210,26 @@ mod tests {
 
     #[test]
     fn test_sysconf_page_size() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         assert_eq!(sys_sysconf(30), Ok(65536)); // _SC_PAGE_SIZE
         assert_eq!(sys_sysconf(11), Ok(65536)); // _SC_PAGESIZE
     }
 
     #[test]
     fn test_sysconf_open_max() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         assert_eq!(sys_sysconf(4), Ok(1024)); // _SC_OPEN_MAX
     }
 
     #[test]
     fn test_sysconf_nprocessors() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         assert_eq!(sys_sysconf(6), Ok(1)); // _SC_NPROCESSORS_ONLN
     }
 
     #[test]
     fn test_sysconf_invalid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         assert_eq!(sys_sysconf(9999), Err(Errno::EINVAL));
     }
 
@@ -11237,25 +11237,25 @@ mod tests {
 
     #[test]
     fn test_pathconf_name_max() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         assert_eq!(sys_pathconf(b"/tmp/foo", 4), Ok(255)); // _PC_NAME_MAX
     }
 
     #[test]
     fn test_pathconf_pipe_buf() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         assert_eq!(sys_pathconf(b"/tmp/foo", 6), Ok(4096)); // _PC_PIPE_BUF
     }
 
     #[test]
     fn test_pathconf_invalid_name() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         assert_eq!(sys_pathconf(b"/tmp/foo", 999), Err(Errno::EINVAL));
     }
 
     #[test]
     fn test_fpathconf_valid_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         // fd 0 is pre-opened (stdin)
         assert_eq!(sys_fpathconf(&proc, 0, 5), Ok(4096)); // _PC_PATH_MAX
@@ -11263,7 +11263,7 @@ mod tests {
 
     #[test]
     fn test_fpathconf_invalid_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_fpathconf(&proc, 99, 5), Err(Errno::EBADF));
     }
@@ -11272,7 +11272,7 @@ mod tests {
 
     #[test]
     fn test_getsockname_socket() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::socket::*;
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -11286,7 +11286,7 @@ mod tests {
 
     #[test]
     fn test_getsockname_non_socket() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let mut buf = [0u8; 16];
         // fd 0 is stdin, not a socket
@@ -11295,7 +11295,7 @@ mod tests {
 
     #[test]
     fn test_getpeername_connected() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::socket::*;
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -11310,7 +11310,7 @@ mod tests {
 
     #[test]
     fn test_ftruncate_regular_file() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_WRONLY | O_CREAT, 0o644).unwrap();
@@ -11320,7 +11320,7 @@ mod tests {
 
     #[test]
     fn test_ftruncate_negative_length() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_WRONLY | O_CREAT, 0o644).unwrap();
@@ -11330,7 +11330,7 @@ mod tests {
 
     #[test]
     fn test_ftruncate_bad_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_ftruncate(&mut proc, &mut host, 99, 0);
@@ -11339,7 +11339,7 @@ mod tests {
 
     #[test]
     fn test_ftruncate_pipe_einval() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, _w) = sys_pipe(&mut proc).unwrap();
@@ -11349,7 +11349,7 @@ mod tests {
 
     #[test]
     fn test_ftruncate_rdonly_einval() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_RDONLY, 0o644).unwrap();
@@ -11361,7 +11361,7 @@ mod tests {
 
     #[test]
     fn test_fsync_regular_file() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_WRONLY | O_CREAT, 0o644).unwrap();
@@ -11371,7 +11371,7 @@ mod tests {
 
     #[test]
     fn test_fsync_bad_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_fsync(&mut proc, &mut host, 99);
@@ -11380,7 +11380,7 @@ mod tests {
 
     #[test]
     fn test_fsync_pipe_einval() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, _w) = sys_pipe(&mut proc).unwrap();
@@ -11390,7 +11390,7 @@ mod tests {
 
     #[test]
     fn test_dup3_with_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // dup3 fd 0 to fd 5 with O_CLOEXEC
@@ -11402,7 +11402,7 @@ mod tests {
 
     #[test]
     fn test_dup3_without_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_dup3(&mut proc, &mut host, 0, 5, 0);
@@ -11413,7 +11413,7 @@ mod tests {
 
     #[test]
     fn test_dup3_same_fd_einval() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_dup3(&mut proc, &mut host, 0, 0, 0);
@@ -11422,7 +11422,7 @@ mod tests {
 
     #[test]
     fn test_pipe2_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (r, w) = sys_pipe2(&mut proc, O_CLOEXEC).unwrap();
         let r_entry = proc.fd_table.get(r).unwrap();
@@ -11433,7 +11433,7 @@ mod tests {
 
     #[test]
     fn test_pipe2_nonblock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, _w) = sys_pipe2(&mut proc, O_NONBLOCK).unwrap();
@@ -11445,7 +11445,7 @@ mod tests {
 
     #[test]
     fn test_pipe2_both_flags() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (r, w) = sys_pipe2(&mut proc, O_CLOEXEC | O_NONBLOCK).unwrap();
         let r_entry = proc.fd_table.get(r).unwrap();
@@ -11461,7 +11461,7 @@ mod tests {
 
     #[test]
     fn test_writev_multiple_buffers() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, w) = sys_pipe(&mut proc).unwrap();
@@ -11477,7 +11477,7 @@ mod tests {
 
     #[test]
     fn test_readv_multiple_buffers() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, w) = sys_pipe(&mut proc).unwrap();
@@ -11495,7 +11495,7 @@ mod tests {
 
     #[test]
     fn test_writev_empty_buffer() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (_r, w) = sys_pipe(&mut proc).unwrap();
@@ -11506,7 +11506,7 @@ mod tests {
 
     #[test]
     fn test_writev_bad_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let bufs: &[&[u8]] = &[b"hello"];
@@ -11516,7 +11516,7 @@ mod tests {
 
     #[test]
     fn test_readv_bad_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf1 = [0u8; 5];
@@ -11527,7 +11527,7 @@ mod tests {
 
     #[test]
     fn test_readv_empty_buffers() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, w) = sys_pipe(&mut proc).unwrap();
@@ -11542,7 +11542,7 @@ mod tests {
 
     #[test]
     fn test_getrlimit_nofile_default() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let (soft, hard) = sys_getrlimit(&proc, 7).unwrap(); // RLIMIT_NOFILE
         assert_eq!(soft, 1024);
@@ -11551,7 +11551,7 @@ mod tests {
 
     #[test]
     fn test_getrlimit_stack_default() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let (soft, hard) = sys_getrlimit(&proc, 3).unwrap(); // RLIMIT_STACK
         assert_eq!(soft, 8 * 1024 * 1024);
@@ -11560,7 +11560,7 @@ mod tests {
 
     #[test]
     fn test_setrlimit_and_getrlimit() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setrlimit(&mut proc, 7, 512, 2048).unwrap(); // RLIMIT_NOFILE
         let (soft, hard) = sys_getrlimit(&proc, 7).unwrap();
@@ -11570,7 +11570,7 @@ mod tests {
 
     #[test]
     fn test_setrlimit_soft_exceeds_hard() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_setrlimit(&mut proc, 7, 5000, 1000);
         assert_eq!(result, Err(Errno::EINVAL));
@@ -11578,7 +11578,7 @@ mod tests {
 
     #[test]
     fn test_setrlimit_nofile_enforced() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -11598,7 +11598,7 @@ mod tests {
 
     #[test]
     fn test_rlimit_fsize_enforced() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -11622,7 +11622,7 @@ mod tests {
 
     #[test]
     fn test_ftruncate_rlimit_fsize() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/ftrunc_test", O_WRONLY | O_CREAT, 0o644).unwrap();
@@ -11640,7 +11640,7 @@ mod tests {
 
     #[test]
     fn test_poll_socket_pollerr() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::socket::*;
         use wasm_posix_shared::poll::*;
 
@@ -11659,7 +11659,7 @@ mod tests {
 
     #[test]
     fn test_getrlimit_invalid_resource() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         let result = sys_getrlimit(&proc, 99);
         assert_eq!(result, Err(Errno::EINVAL));
@@ -11669,7 +11669,7 @@ mod tests {
 
     #[test]
     fn test_truncate_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_truncate(&mut proc, &mut host, b"/tmp/test", 100);
@@ -11680,7 +11680,7 @@ mod tests {
 
     #[test]
     fn test_fdatasync() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_WRONLY | O_CREAT, 0o644).unwrap();
@@ -11692,7 +11692,7 @@ mod tests {
 
     #[test]
     fn test_fchmod() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_WRONLY | O_CREAT, 0o644).unwrap();
@@ -11706,7 +11706,7 @@ mod tests {
         // even though the mode change has no observable effect. dinit and
         // other daemons rely on this — pre-relaxation EINVAL aborted them
         // mid-startup.
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, _w) = sys_pipe(&mut proc).unwrap();
@@ -11718,7 +11718,7 @@ mod tests {
 
     #[test]
     fn test_fchown() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_WRONLY | O_CREAT, 0o644).unwrap();
@@ -11732,14 +11732,14 @@ mod tests {
 
     #[test]
     fn test_getpgrp_default() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getpgrp(&proc), 1); // pgid == pid
     }
 
     #[test]
     fn test_getpgid_self() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getpgid(&proc, 0), Ok(1)); // pid=0 means current process
         assert_eq!(sys_getpgid(&proc, 1), Ok(1)); // pid=self works too
@@ -11747,14 +11747,14 @@ mod tests {
 
     #[test]
     fn test_getpgid_other_esrch() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getpgid(&proc, 999), Err(Errno::ESRCH));
     }
 
     #[test]
     fn test_setpgid_self() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(2);
         proc.sid = 1; // Not a session leader (child of pid 1)
         let result = sys_setpgid(&mut proc, 0, 42); // pid=0 means self
@@ -11764,7 +11764,7 @@ mod tests {
 
     #[test]
     fn test_setpgid_zero_pgid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(2);
         proc.sid = 1; // Not a session leader
         let result = sys_setpgid(&mut proc, 0, 0); // pgid=0 means use pid
@@ -11774,7 +11774,7 @@ mod tests {
 
     #[test]
     fn test_setpgid_session_leader_eperm() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // Make it a session leader by calling setsid
         let _ = sys_setsid(&mut proc);
@@ -11785,7 +11785,7 @@ mod tests {
 
     #[test]
     fn test_setpgid_other_process_esrch() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_setpgid(&mut proc, 999, 42); // pid != self
         assert_eq!(result, Err(Errno::ESRCH));
@@ -11793,21 +11793,21 @@ mod tests {
 
     #[test]
     fn test_getsid_self() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getsid(&proc, 0), Ok(0)); // initial process has sid=0 (not a session leader)
     }
 
     #[test]
     fn test_getsid_other_esrch() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert_eq!(sys_getsid(&proc, 999), Err(Errno::ESRCH));
     }
 
     #[test]
     fn test_setsid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // Simulate a child process (pid=2) that inherited parent's session (sid=1)
         let mut proc = Process::new(2);
         proc.sid = 1;
@@ -11820,7 +11820,7 @@ mod tests {
 
     #[test]
     fn test_setsid_already_leader_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // First call setsid to become a session leader
         let result = sys_setsid(&mut proc);
@@ -11835,7 +11835,7 @@ mod tests {
 
     #[test]
     fn test_faccessat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Should delegate to sys_access
@@ -11845,7 +11845,7 @@ mod tests {
 
     #[test]
     fn test_faccessat_real_dirfd_invalid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 5 doesn't exist, should get EBADF
@@ -11855,7 +11855,7 @@ mod tests {
 
     #[test]
     fn test_faccessat_absolute_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_faccessat(&mut proc, &mut host, 5, b"/absolute", 0, 0);
@@ -11864,7 +11864,7 @@ mod tests {
 
     #[test]
     fn test_fchmodat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_fchmodat(&mut proc, &mut host, -100, b"/tmp/test", 0o644, 0);
@@ -11873,7 +11873,7 @@ mod tests {
 
     #[test]
     fn test_fchmodat_real_dirfd_invalid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 5 doesn't exist, should get EBADF
@@ -11883,7 +11883,7 @@ mod tests {
 
     #[test]
     fn test_fchownat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_fchownat(&mut proc, &mut host, -100, b"/tmp/test", 1000, 1000, 0);
@@ -11892,7 +11892,7 @@ mod tests {
 
     #[test]
     fn test_fchownat_real_dirfd_invalid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 5 doesn't exist, should get EBADF
@@ -11902,7 +11902,7 @@ mod tests {
 
     #[test]
     fn test_linkat_both_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_linkat(&mut proc, &mut host, -100, b"/old", -100, b"/new", 0);
@@ -11911,7 +11911,7 @@ mod tests {
 
     #[test]
     fn test_linkat_real_dirfd_invalid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 5 doesn't exist, should get EBADF
@@ -11921,7 +11921,7 @@ mod tests {
 
     #[test]
     fn test_symlinkat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_symlinkat(&mut proc, &mut host, b"target", -100, b"/link");
@@ -11930,7 +11930,7 @@ mod tests {
 
     #[test]
     fn test_symlinkat_real_dirfd_invalid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 5 doesn't exist, should get EBADF
@@ -11940,7 +11940,7 @@ mod tests {
 
     #[test]
     fn test_readlinkat_at_fdcwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 256];
@@ -11951,7 +11951,7 @@ mod tests {
 
     #[test]
     fn test_readlinkat_real_dirfd_invalid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 256];
@@ -11964,7 +11964,7 @@ mod tests {
 
     #[test]
     fn test_select_regular_file_readable() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Open a regular file
@@ -11981,7 +11981,7 @@ mod tests {
 
     #[test]
     fn test_select_empty_sets() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_select(&mut proc, &mut host, 0, None, None, None, 0);
@@ -11990,7 +11990,7 @@ mod tests {
 
     #[test]
     fn test_select_invalid_nfds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_select(&mut proc, &mut host, -1, None, None, None, 0);
@@ -11999,7 +11999,7 @@ mod tests {
 
     #[test]
     fn test_select_pipe_readable() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -12019,7 +12019,7 @@ mod tests {
 
     #[test]
     fn test_select_pipe_writable() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -12037,7 +12037,7 @@ mod tests {
 
     #[test]
     fn test_select_multiple_fds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -12057,7 +12057,7 @@ mod tests {
 
     #[test]
     fn test_setuid_as_root_sets_both() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         assert_eq!(proc.uid, 0);
         sys_setuid(&mut proc, 42).unwrap();
@@ -12067,7 +12067,7 @@ mod tests {
 
     #[test]
     fn test_setuid_nonroot_to_own_uid_sets_euid_only() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setuid(&mut proc, 7).unwrap(); // drop to uid=euid=7
         // Simulate regaining privilege partly: impossible without saved-set,
@@ -12078,7 +12078,7 @@ mod tests {
 
     #[test]
     fn test_setuid_nonroot_to_other_uid_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setuid(&mut proc, 7).unwrap();
         assert_eq!(sys_setuid(&mut proc, 99), Err(Errno::EPERM));
@@ -12088,7 +12088,7 @@ mod tests {
 
     #[test]
     fn test_setgid_as_root_sets_both() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setgid(&mut proc, 42).unwrap();
         assert_eq!(proc.gid, 42);
@@ -12097,7 +12097,7 @@ mod tests {
 
     #[test]
     fn test_setgid_nonroot_to_other_gid_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setuid(&mut proc, 7).unwrap(); // drop privilege
         assert_eq!(sys_setgid(&mut proc, 99), Err(Errno::EPERM));
@@ -12105,7 +12105,7 @@ mod tests {
 
     #[test]
     fn test_seteuid_as_root_allows_any() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_seteuid(&mut proc, 500).unwrap();
         assert_eq!(proc.uid, 0); // real uid unchanged
@@ -12114,7 +12114,7 @@ mod tests {
 
     #[test]
     fn test_seteuid_nonroot_back_to_ruid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setuid(&mut proc, 7).unwrap();
         sys_seteuid(&mut proc, 7).unwrap();
@@ -12123,7 +12123,7 @@ mod tests {
 
     #[test]
     fn test_seteuid_nonroot_to_other_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setuid(&mut proc, 7).unwrap();
         assert_eq!(sys_seteuid(&mut proc, 99), Err(Errno::EPERM));
@@ -12131,7 +12131,7 @@ mod tests {
 
     #[test]
     fn test_setegid_as_root_allows_any() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         sys_setegid(&mut proc, 500).unwrap();
         assert_eq!(proc.gid, 0);
@@ -12140,20 +12140,17 @@ mod tests {
 
     #[test]
     fn test_can_signal_root_to_anyone() {
-        let _kernel_test_guard = crate::test_lock::lock();
         assert!(can_signal(0, 0, 1, 1));
         assert!(can_signal(0, 0, 42, 99));
     }
 
     #[test]
     fn test_can_signal_same_user() {
-        let _kernel_test_guard = crate::test_lock::lock();
         assert!(can_signal(7, 7, 7, 7));
     }
 
     #[test]
     fn test_can_signal_matches_real_or_effective() {
-        let _kernel_test_guard = crate::test_lock::lock();
         // sender.euid matches target.ruid
         assert!(can_signal(99, 7, 7, 0));
         // sender.ruid matches target.euid
@@ -12162,20 +12159,17 @@ mod tests {
 
     #[test]
     fn test_can_signal_denies_cross_user() {
-        let _kernel_test_guard = crate::test_lock::lock();
         assert!(!can_signal(7, 7, 0, 0));
         assert!(!can_signal(1, 1, 2, 2));
     }
 
     #[test]
     fn test_can_query_sched_root_allowed() {
-        let _kernel_test_guard = crate::test_lock::lock();
         assert!(can_query_sched(0, 1, 1));
     }
 
     #[test]
     fn test_can_query_sched_euid_match() {
-        let _kernel_test_guard = crate::test_lock::lock();
         assert!(can_query_sched(7, 7, 7));
         assert!(can_query_sched(7, 7, 99));
         assert!(can_query_sched(7, 99, 7));
@@ -12183,7 +12177,6 @@ mod tests {
 
     #[test]
     fn test_can_query_sched_denies_when_only_ruid_matches() {
-        let _kernel_test_guard = crate::test_lock::lock();
         // seteuid-only drop: sender ruid still matches target but euid does
         // not — POSIX sched_* still denies.
         assert!(!can_query_sched(1000, 0, 0));
@@ -12194,7 +12187,7 @@ mod tests {
 
     #[test]
     fn test_getrusage_self() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0xFFu8; 144];
         let result = sys_getrusage(&mut proc, 0, &mut buf);
@@ -12205,7 +12198,7 @@ mod tests {
 
     #[test]
     fn test_getrusage_children() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0xFFu8; 144];
         let result = sys_getrusage(&mut proc, -1, &mut buf);
@@ -12215,7 +12208,7 @@ mod tests {
 
     #[test]
     fn test_getrusage_invalid_who() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 144];
         let result = sys_getrusage(&mut proc, 5, &mut buf);
@@ -12224,7 +12217,7 @@ mod tests {
 
     #[test]
     fn test_getrusage_buffer_too_small() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 10];
         let result = sys_getrusage(&mut proc, 0, &mut buf);
@@ -12235,7 +12228,7 @@ mod tests {
 
     #[test]
     fn test_realpath_absolute() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 256];
@@ -12245,7 +12238,7 @@ mod tests {
 
     #[test]
     fn test_realpath_relative() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         proc.cwd = b"/home/user".to_vec();
         let mut host = MockHostIO::new();
@@ -12256,7 +12249,7 @@ mod tests {
 
     #[test]
     fn test_realpath_dotdot() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         proc.cwd = b"/home/user".to_vec();
         let mut host = MockHostIO::new();
@@ -12267,7 +12260,7 @@ mod tests {
 
     #[test]
     fn test_realpath_dot() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         proc.cwd = b"/home/user".to_vec();
         let mut host = MockHostIO::new();
@@ -12278,7 +12271,7 @@ mod tests {
 
     #[test]
     fn test_realpath_empty_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 256];
@@ -12288,7 +12281,7 @@ mod tests {
 
     #[test]
     fn test_realpath_buffer_too_small() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 3]; // Too small for "/tmp/test"
@@ -12298,7 +12291,7 @@ mod tests {
 
     #[test]
     fn test_fork_returns_enosys_with_mock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let host = MockHostIO::new();
         let result = sys_fork(&mut proc, &host);
@@ -12307,7 +12300,7 @@ mod tests {
 
     #[test]
     fn test_fork_child_fields_default_to_false() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         assert!(!proc.fork_child);
         assert!(proc.fork_exec_path.is_none());
@@ -12317,7 +12310,7 @@ mod tests {
 
     #[test]
     fn test_execve_empty_path_returns_enoent() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_execve(&mut proc, &mut host, b"");
@@ -12326,7 +12319,7 @@ mod tests {
 
     #[test]
     fn test_execve_delegates_to_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_execve(&mut proc, &mut host, b"/bin/ls");
@@ -12335,7 +12328,7 @@ mod tests {
 
     #[test]
     fn test_alarm_sets_deadline_and_returns_zero_initially() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let remaining = sys_alarm(&mut proc, &mut host, 5).unwrap();
@@ -12345,7 +12338,7 @@ mod tests {
 
     #[test]
     fn test_alarm_returns_previous_remaining() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_alarm(&mut proc, &mut host, 10).unwrap();
@@ -12355,7 +12348,7 @@ mod tests {
 
     #[test]
     fn test_alarm_zero_cancels() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_alarm(&mut proc, &mut host, 5).unwrap();
@@ -12366,7 +12359,7 @@ mod tests {
 
     #[test]
     fn test_sigsuspend_returns_eintr_when_signal_already_pending() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         proc.signals.raise(2); // SIGINT
@@ -12376,7 +12369,7 @@ mod tests {
 
     #[test]
     fn test_sigsuspend_restores_old_mask() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         proc.signals.blocked = 0xFF;
@@ -12387,7 +12380,7 @@ mod tests {
 
     #[test]
     fn test_sigsuspend_blocks_until_signal() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         host.sigsuspend_signal = 15; // SIGTERM
@@ -12398,7 +12391,7 @@ mod tests {
 
     #[test]
     fn test_sigsuspend_cannot_block_sigkill() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         host.sigsuspend_signal = 9; // SIGKILL
@@ -12410,7 +12403,7 @@ mod tests {
 
     #[test]
     fn test_sigsuspend_restores_mask_on_host_error() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         proc.signals.blocked = 0xFF;
@@ -12667,7 +12660,7 @@ mod tests {
 
     #[test]
     fn test_openat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/home/user/dir");
@@ -12679,7 +12672,7 @@ mod tests {
 
     #[test]
     fn test_fstatat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/var/dir");
@@ -12690,7 +12683,7 @@ mod tests {
 
     #[test]
     fn test_fstatat_with_real_dirfd_nofollow() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/var/dir");
@@ -12701,7 +12694,7 @@ mod tests {
 
     #[test]
     fn test_unlinkat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/tmp/dir");
@@ -12712,7 +12705,7 @@ mod tests {
 
     #[test]
     fn test_unlinkat_removedir_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/tmp/dir");
@@ -12723,7 +12716,7 @@ mod tests {
 
     #[test]
     fn test_mkdirat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/home/dir");
@@ -12734,7 +12727,7 @@ mod tests {
 
     #[test]
     fn test_renameat_with_real_dirfds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd1 = open_dir_fd(&mut proc, &mut host, b"/src/dir");
@@ -12747,7 +12740,7 @@ mod tests {
 
     #[test]
     fn test_linkat_with_real_dirfds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/data/dir");
@@ -12759,7 +12752,7 @@ mod tests {
 
     #[test]
     fn test_symlinkat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/opt/dir");
@@ -12772,7 +12765,7 @@ mod tests {
 
     #[test]
     fn test_readlinkat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/etc/dir");
@@ -12784,7 +12777,7 @@ mod tests {
 
     #[test]
     fn test_fchmodat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/var/dir");
@@ -12795,7 +12788,7 @@ mod tests {
 
     #[test]
     fn test_fchownat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/var/dir");
@@ -12806,7 +12799,7 @@ mod tests {
 
     #[test]
     fn test_faccessat_with_real_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/var/dir");
@@ -12817,7 +12810,7 @@ mod tests {
 
     #[test]
     fn test_at_absolute_path_ignores_dirfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/wrong/dir");
@@ -12829,7 +12822,7 @@ mod tests {
 
     #[test]
     fn test_at_enotdir_when_dirfd_is_regular_file() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         // Open a regular file (not a directory)
@@ -12841,7 +12834,7 @@ mod tests {
 
     #[test]
     fn test_openat_stores_resolved_path_in_ofd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let dirfd = open_dir_fd(&mut proc, &mut host, b"/base/dir");
@@ -12854,7 +12847,7 @@ mod tests {
 
     #[test]
     fn test_inet_socket_creation() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -12864,7 +12857,7 @@ mod tests {
 
     #[test]
     fn test_inet_connect_returns_econnrefused_with_mock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // MockHostIO returns ECONNREFUSED for host_net_connect
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -12878,7 +12871,7 @@ mod tests {
 
     #[test]
     fn test_inet_send_on_unconnected_returns_enotconn() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -12889,7 +12882,7 @@ mod tests {
 
     #[test]
     fn test_unix_socket_connect_still_returns_econnrefused() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // AF_UNIX SOCK_STREAM connect to nonexistent path should fail with ECONNREFUSED
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -12906,7 +12899,7 @@ mod tests {
 
     #[test]
     fn test_unix_dgram_connect_succeeds_as_bit_bucket() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -12920,7 +12913,7 @@ mod tests {
 
     #[test]
     fn test_unix_stream_connect_same_process() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let _lock = UNIX_REGISTRY_LOCK.lock().unwrap();
         let mut proc = Process::new(9001);
         let mut host = MockHostIO::new();
@@ -12959,7 +12952,7 @@ mod tests {
 
     #[test]
     fn test_unix_stream_connect_no_listener() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let _lock = UNIX_REGISTRY_LOCK.lock().unwrap();
         let mut proc = Process::new(9002);
         let mut host = MockHostIO::new();
@@ -12975,7 +12968,7 @@ mod tests {
 
     #[test]
     fn test_unix_stream_bidirectional_data() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let _lock = UNIX_REGISTRY_LOCK.lock().unwrap();
         let mut proc = Process::new(9003);
         let mut host = MockHostIO::new();
@@ -13019,7 +13012,7 @@ mod tests {
 
     #[test]
     fn test_stat_unix_socket_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let _lock = UNIX_REGISTRY_LOCK.lock().unwrap();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -13041,7 +13034,7 @@ mod tests {
 
     #[test]
     fn test_unlink_unix_socket_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let _lock = UNIX_REGISTRY_LOCK.lock().unwrap();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -13070,7 +13063,7 @@ mod tests {
 
     #[test]
     fn test_fstat_socket_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_socket(&mut proc, &mut host, 1, 1, 0).unwrap();
@@ -13080,7 +13073,7 @@ mod tests {
 
     #[test]
     fn test_getsockname_unix_with_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let _lock = UNIX_REGISTRY_LOCK.lock().unwrap();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -13105,7 +13098,7 @@ mod tests {
 
     #[test]
     fn test_clock_getres_per_process_cpu_clock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let proc = Process::new(1);
         // clock_getcpuclockid(pid) encodes as (-pid-1)*8 + 2
         // For pid=1: (-1-1)*8 + 2 = -16 + 2 = -14, as u32 = 4294967282
@@ -13117,7 +13110,7 @@ mod tests {
 
     #[test]
     fn test_getaddrinfo_returns_enoent_with_mock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut result = [0u8; 16];
@@ -13127,7 +13120,7 @@ mod tests {
 
     #[test]
     fn test_inet_write_after_connect_succeeds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // Create a mock that accepts connect and send
         struct NetMock;
         impl HostIO for NetMock {
@@ -13210,7 +13203,7 @@ mod tests {
 
     #[test]
     fn test_getitimer_initial_zero() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_getitimer(&mut proc, &mut host, 0).unwrap();
@@ -13219,7 +13212,7 @@ mod tests {
 
     #[test]
     fn test_getitimer_virtual_always_zero() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_getitimer(&mut proc, &mut host, 1).unwrap();
@@ -13228,7 +13221,7 @@ mod tests {
 
     #[test]
     fn test_getitimer_invalid_which() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_getitimer(&mut proc, &mut host, 3);
@@ -13237,7 +13230,7 @@ mod tests {
 
     #[test]
     fn test_setitimer_cancel() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Set an alarm first
@@ -13255,7 +13248,7 @@ mod tests {
 
     #[test]
     fn test_setitimer_sets_alarm() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // MockHostIO returns time (1234567890, 123456789)
@@ -13272,7 +13265,7 @@ mod tests {
 
     #[test]
     fn test_setitimer_virtual_noop() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_setitimer(&mut proc, &mut host, 1, 1, 0, 1, 0).unwrap();
@@ -13285,7 +13278,7 @@ mod tests {
 
     #[test]
     fn test_sigtimedwait_pending_signal() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Raise SIGUSR1 (signal 10)
@@ -13300,7 +13293,7 @@ mod tests {
 
     #[test]
     fn test_sigtimedwait_no_pending_timeout_zero() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mask = crate::signal::sig_bit(10);
@@ -13310,7 +13303,7 @@ mod tests {
 
     #[test]
     fn test_sigtimedwait_dequeues_lowest() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Raise both SIGUSR1 (10) and SIGUSR2 (12)
@@ -13325,7 +13318,7 @@ mod tests {
 
     #[test]
     fn test_sigtimedwait_rt_queued_multiple() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Queue SIGRTMIN (32) three times
@@ -13354,7 +13347,7 @@ mod tests {
 
     #[test]
     fn test_preadv_basic() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/test/file", O_RDONLY, 0).unwrap();
@@ -13368,7 +13361,7 @@ mod tests {
 
     #[test]
     fn test_preadv_rejects_pipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let (read_fd, _write_fd) = sys_pipe(&mut proc).unwrap();
@@ -13380,7 +13373,7 @@ mod tests {
 
     #[test]
     fn test_pwritev_rejects_pipe() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let (_read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
@@ -13393,7 +13386,7 @@ mod tests {
 
     #[test]
     fn test_sendfile_copies_data() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let in_fd = sys_open(&mut proc, &mut host, b"/test/in", O_RDONLY, 0).unwrap();
@@ -13408,7 +13401,7 @@ mod tests {
 
     #[test]
     fn test_statx_delegates_to_fstatat() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = TrackingHostIO::new();
         let result = sys_statx(&mut proc, &mut host, -100, b"/test/file", 0, 0);
@@ -13420,7 +13413,7 @@ mod tests {
 
     #[test]
     fn test_stat_dev_null() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let st = sys_stat(&mut proc, &mut host, b"/dev/null").unwrap();
@@ -13432,7 +13425,7 @@ mod tests {
 
     #[test]
     fn test_fstat_dev_zero() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/zero", O_RDONLY, 0).unwrap();
@@ -13443,7 +13436,7 @@ mod tests {
 
     #[test]
     fn test_lseek_dev_null() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/null", O_RDWR, 0).unwrap();
@@ -13453,7 +13446,7 @@ mod tests {
 
     #[test]
     fn test_access_dev_urandom() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         sys_access(&mut proc, &mut host, b"/dev/urandom", 4).unwrap();
@@ -13461,7 +13454,7 @@ mod tests {
 
     #[test]
     fn test_close_dev_null() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/null", O_RDWR, 0).unwrap();
@@ -13471,7 +13464,7 @@ mod tests {
 
     #[test]
     fn test_stat_dev_fd_path() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let st = sys_stat(&mut proc, &mut host, b"/dev/fd/0").unwrap();
@@ -13480,7 +13473,7 @@ mod tests {
 
     #[test]
     fn test_read_dev_null_eof() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/null", O_RDONLY, 0).unwrap();
@@ -13491,7 +13484,7 @@ mod tests {
 
     #[test]
     fn test_write_dev_null_discards() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/null", O_WRONLY, 0).unwrap();
@@ -13501,7 +13494,7 @@ mod tests {
 
     #[test]
     fn test_read_dev_zero_fills() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/zero", O_RDONLY, 0).unwrap();
@@ -13513,7 +13506,7 @@ mod tests {
 
     #[test]
     fn test_read_dev_urandom_returns_bytes() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/urandom", O_RDONLY, 0).unwrap();
@@ -13528,7 +13521,7 @@ mod tests {
 
     #[test]
     fn test_read_dev_full_fills_zeros() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/full", O_RDONLY, 0).unwrap();
@@ -13540,7 +13533,7 @@ mod tests {
 
     #[test]
     fn test_write_dev_full_enospc() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/full", O_WRONLY, 0).unwrap();
@@ -13550,7 +13543,7 @@ mod tests {
 
     #[test]
     fn test_write_dev_zero_discards() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/zero", O_WRONLY, 0).unwrap();
@@ -13560,7 +13553,7 @@ mod tests {
 
     #[test]
     fn test_open_dev_null() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/null", O_RDWR, 0).unwrap();
@@ -13572,7 +13565,7 @@ mod tests {
 
     #[test]
     fn test_open_dev_zero() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/zero", O_RDONLY, 0).unwrap();
@@ -13582,7 +13575,7 @@ mod tests {
 
     #[test]
     fn test_open_dev_urandom() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/urandom", O_RDONLY, 0).unwrap();
@@ -13592,7 +13585,7 @@ mod tests {
 
     #[test]
     fn test_open_dev_full() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/full", O_RDWR, 0).unwrap();
@@ -13602,7 +13595,7 @@ mod tests {
 
     #[test]
     fn test_open_dev_fd_dups_existing() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 1 = stdout, opening /dev/fd/1 should dup it
@@ -13615,7 +13608,7 @@ mod tests {
 
     #[test]
     fn test_open_dev_stdin_alias() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/stdin", O_RDONLY, 0).unwrap();
@@ -13626,7 +13619,7 @@ mod tests {
 
     #[test]
     fn test_open_dev_fd_nonexistent() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_open(&mut proc, &mut host, b"/dev/fd/999", O_RDONLY, 0);
@@ -13635,7 +13628,6 @@ mod tests {
 
     #[test]
     fn test_match_virtual_device() {
-        let _kernel_test_guard = crate::test_lock::lock();
         assert_eq!(match_virtual_device(b"/dev/null"), Some(VirtualDevice::Null));
         assert_eq!(match_virtual_device(b"/dev/zero"), Some(VirtualDevice::Zero));
         assert_eq!(match_virtual_device(b"/dev/urandom"), Some(VirtualDevice::Urandom));
@@ -13647,7 +13639,6 @@ mod tests {
 
     #[test]
     fn test_match_dev_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
         assert_eq!(match_dev_fd(b"/dev/stdin"), Some(0));
         assert_eq!(match_dev_fd(b"/dev/stdout"), Some(1));
         assert_eq!(match_dev_fd(b"/dev/stderr"), Some(2));
@@ -13661,7 +13652,6 @@ mod tests {
 
     #[test]
     fn test_virtual_device_roundtrip() {
-        let _kernel_test_guard = crate::test_lock::lock();
         for dev in [VirtualDevice::Null, VirtualDevice::Zero, VirtualDevice::Urandom, VirtualDevice::Full, VirtualDevice::Fb0] {
             assert_eq!(VirtualDevice::from_host_handle(dev.host_handle()), Some(dev));
         }
@@ -13673,7 +13663,7 @@ mod tests {
 
     #[test]
     fn test_bind_inet_ephemeral_port() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -13692,7 +13682,7 @@ mod tests {
 
     #[test]
     fn test_getsockname_inet_explicit_port() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -13713,7 +13703,7 @@ mod tests {
 
     #[test]
     fn test_tcp_loopback() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -13756,7 +13746,7 @@ mod tests {
 
     #[test]
     fn test_udp_loopback() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::socket::*;
@@ -13801,7 +13791,7 @@ mod tests {
 
     #[test]
     fn test_process_thread_alloc_tid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(42);
         let tid1 = proc.alloc_tid();
         let tid2 = proc.alloc_tid();
@@ -13811,7 +13801,7 @@ mod tests {
 
     #[test]
     fn test_process_thread_add_remove() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use crate::process::ThreadInfo;
         let mut proc = Process::new(10);
         let tid = proc.alloc_tid();
@@ -13826,7 +13816,7 @@ mod tests {
 
     #[test]
     fn test_clone_rejects_non_thread() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // Without CLONE_VM | CLONE_THREAD, clone should return ENOSYS
@@ -13836,7 +13826,7 @@ mod tests {
 
     #[test]
     fn test_clone_rejects_clone_vm_only() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         const CLONE_VM: u32 = 0x00000100;
@@ -13847,7 +13837,7 @@ mod tests {
 
     #[test]
     fn test_clone_non_centralized_delegates_to_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         const CLONE_VM: u32 = 0x00000100;
@@ -13860,7 +13850,7 @@ mod tests {
 
     #[test]
     fn test_process_multiple_threads() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use crate::process::ThreadInfo;
         let mut proc = Process::new(1);
 
@@ -13885,7 +13875,6 @@ mod tests {
 
     #[test]
     fn test_thread_info_fields() {
-        let _kernel_test_guard = crate::test_lock::lock();
         use crate::process::ThreadInfo;
         let mut info = ThreadInfo::new(42, 0xABC, 0xDEF, 0x123);
         assert_eq!(info.tid, 42);
@@ -13900,7 +13889,7 @@ mod tests {
 
     #[test]
     fn test_process_get_thread_mut() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use crate::process::ThreadInfo;
         let mut proc = Process::new(5);
         let tid = proc.alloc_tid();
@@ -13915,7 +13904,7 @@ mod tests {
 
     #[test]
     fn test_remove_nonexistent_thread() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         assert!(proc.remove_thread(999).is_none());
     }
@@ -13924,7 +13913,7 @@ mod tests {
 
     #[test]
     fn test_epoll_create1_basic() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let epfd = sys_epoll_create1(&mut proc, 0).unwrap();
         assert!(epfd >= 3);
@@ -13936,7 +13925,7 @@ mod tests {
 
     #[test]
     fn test_epoll_create1_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let epfd = sys_epoll_create1(&mut proc, O_CLOEXEC).unwrap();
         let entry = proc.fd_table.get(epfd).unwrap();
@@ -13945,7 +13934,7 @@ mod tests {
 
     #[test]
     fn test_epoll_create1_invalid_flags() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_epoll_create1(&mut proc, 0xDEAD);
         assert_eq!(result, Err(Errno::EINVAL));
@@ -13953,7 +13942,7 @@ mod tests {
 
     #[test]
     fn test_epoll_ctl_add_del() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let epfd = sys_epoll_create1(&mut proc, 0).unwrap();
 
@@ -13978,7 +13967,7 @@ mod tests {
 
     #[test]
     fn test_epoll_ctl_add_duplicate_eexist() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let epfd = sys_epoll_create1(&mut proc, 0).unwrap();
 
@@ -13989,7 +13978,7 @@ mod tests {
 
     #[test]
     fn test_epoll_ctl_del_nonexistent_enoent() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let epfd = sys_epoll_create1(&mut proc, 0).unwrap();
 
@@ -13999,7 +13988,7 @@ mod tests {
 
     #[test]
     fn test_epoll_ctl_mod() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let epfd = sys_epoll_create1(&mut proc, 0).unwrap();
 
@@ -14018,7 +14007,7 @@ mod tests {
 
     #[test]
     fn test_epoll_ctl_invalid_op() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let epfd = sys_epoll_create1(&mut proc, 0).unwrap();
         let result = sys_epoll_ctl(&mut proc, epfd, 99, 0, 0, 0);
@@ -14027,7 +14016,7 @@ mod tests {
 
     #[test]
     fn test_epoll_ctl_not_epoll_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         // fd 0 is stdin, not an epoll fd
         let result = sys_epoll_ctl(&mut proc, 0, 1, 1, 0x001, 0);
@@ -14036,7 +14025,7 @@ mod tests {
 
     #[test]
     fn test_epoll_pwait_pipe_readable() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -14058,7 +14047,7 @@ mod tests {
 
     #[test]
     fn test_epoll_pwait_empty_interests() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -14070,7 +14059,7 @@ mod tests {
 
     #[test]
     fn test_epoll_pwait_invalid_maxevents() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -14081,7 +14070,7 @@ mod tests {
 
     #[test]
     fn test_epoll_close_frees_state() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let epfd = sys_epoll_create1(&mut proc, 0).unwrap();
@@ -14092,7 +14081,7 @@ mod tests {
 
     #[test]
     fn test_epoll_lseek_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let epfd = sys_epoll_create1(&mut proc, 0).unwrap();
@@ -14103,7 +14092,7 @@ mod tests {
 
     #[test]
     fn test_epoll_with_eventfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -14134,7 +14123,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_basic() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_eventfd2(&mut proc, 0, 0).unwrap();
         assert!(fd >= 3); // 0,1,2 are stdio
@@ -14148,7 +14137,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_with_initial_value() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 42, 0).unwrap();
@@ -14163,7 +14152,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_read_resets_counter() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 10, O_NONBLOCK).unwrap();
@@ -14180,7 +14169,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_write_adds_to_counter() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 5, 0).unwrap();
@@ -14198,7 +14187,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_semaphore_mode() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let efd_semaphore: u32 = 1;
@@ -14224,7 +14213,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_eventfd2(&mut proc, 0, O_CLOEXEC).unwrap();
         let entry = proc.fd_table.get(fd).unwrap();
@@ -14233,7 +14222,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_nonblock() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_eventfd2(&mut proc, 0, O_NONBLOCK).unwrap();
         let entry = proc.fd_table.get(fd).unwrap();
@@ -14243,7 +14232,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_invalid_flags() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_eventfd2(&mut proc, 0, 0xDEAD);
         assert_eq!(result, Err(Errno::EINVAL));
@@ -14251,7 +14240,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_read_too_small_buf() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 1, 0).unwrap();
@@ -14263,7 +14252,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_write_too_small_buf() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 0, 0).unwrap();
@@ -14275,7 +14264,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_write_u64_max_invalid() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 0, 0).unwrap();
@@ -14287,7 +14276,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_poll_readable_when_nonzero() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 5, 0).unwrap();
@@ -14301,7 +14290,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_poll_not_readable_when_zero() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 0, 0).unwrap();
@@ -14315,7 +14304,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_close_frees_state() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 42, 0).unwrap();
@@ -14329,7 +14318,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_lseek_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 0, 0).unwrap();
@@ -14340,7 +14329,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_fstat() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 0, 0).unwrap();
@@ -14351,7 +14340,7 @@ mod tests {
 
     #[test]
     fn test_eventfd2_dup_shares_counter() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_eventfd2(&mut proc, 0, 0).unwrap();
@@ -14374,7 +14363,7 @@ mod tests {
 
     #[test]
     fn test_inotify_init_returns_fd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_inotify_init(&mut proc).unwrap();
         assert!(fd >= 3);
@@ -14385,7 +14374,7 @@ mod tests {
 
     #[test]
     fn test_inotify_init_fd_is_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_inotify_init(&mut proc).unwrap();
         let entry = proc.fd_table.get(fd).unwrap();
@@ -14397,7 +14386,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_create_basic() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_timerfd_create(&mut proc, 0, 0).unwrap(); // CLOCK_REALTIME
         assert!(fd >= 3);
@@ -14409,7 +14398,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_create_with_flags() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_timerfd_create(&mut proc, 1, O_NONBLOCK | O_CLOEXEC).unwrap();
         assert!(fd >= 3);
@@ -14421,7 +14410,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_create_invalid_flags() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_timerfd_create(&mut proc, 0, 0xDEAD);
         assert_eq!(result, Err(Errno::EINVAL));
@@ -14429,7 +14418,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_settime_disarm() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, 0).unwrap();
@@ -14449,7 +14438,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_settime_relative() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, 0).unwrap();
@@ -14470,7 +14459,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_settime_absolute() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, 0).unwrap();
@@ -14486,7 +14475,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_read_no_expiration_eagain() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, O_NONBLOCK).unwrap();
@@ -14503,7 +14492,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_read_after_expiration() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, O_NONBLOCK).unwrap();
@@ -14523,7 +14512,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_read_repeating() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, O_NONBLOCK).unwrap();
@@ -14543,7 +14532,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_read_small_buf() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, O_NONBLOCK).unwrap();
@@ -14555,7 +14544,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_poll_not_expired() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::WasmPollFd;
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
@@ -14572,7 +14561,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_lseek_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, 0).unwrap();
@@ -14583,7 +14572,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_close() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_timerfd_create(&mut proc, 0, 0).unwrap();
@@ -14595,7 +14584,7 @@ mod tests {
 
     #[test]
     fn test_timerfd_gettime_not_timerfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         // fd 0 is stdin, not a timerfd
@@ -14607,7 +14596,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_create() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         use wasm_posix_shared::signal::SIGINT;
         let mask = crate::signal::sig_bit(SIGINT);
@@ -14621,7 +14610,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_create_with_flags() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_signalfd4(&mut proc, -1, 0x04, O_NONBLOCK | O_CLOEXEC).unwrap();
         assert!(fd >= 3);
@@ -14633,7 +14622,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_invalid_flags() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_signalfd4(&mut proc, -1, 0x04, 0xDEAD);
         assert_eq!(result, Err(Errno::EINVAL));
@@ -14641,7 +14630,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_update_existing() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         use wasm_posix_shared::signal::{SIGINT, SIGTERM};
         let mask1 = crate::signal::sig_bit(SIGINT);
@@ -14655,7 +14644,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_read_no_signal_eagain() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::signal::SIGINT;
@@ -14670,7 +14659,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_read_with_pending_signal() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::signal::SIGINT;
@@ -14693,7 +14682,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_read_small_buf() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_signalfd4(&mut proc, -1, 0x04, O_NONBLOCK).unwrap();
@@ -14705,7 +14694,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_read_ignores_unmasked_signals() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         use wasm_posix_shared::signal::{SIGINT, SIGTERM};
@@ -14726,7 +14715,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_poll_with_signal() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::WasmPollFd;
         use wasm_posix_shared::signal::SIGINT;
         let mut proc = Process::new(1);
@@ -14751,7 +14740,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_lseek_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_signalfd4(&mut proc, -1, 0x04, 0).unwrap();
@@ -14762,7 +14751,7 @@ mod tests {
 
     #[test]
     fn test_signalfd4_close() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_signalfd4(&mut proc, -1, 0x04, 0).unwrap();
@@ -14776,7 +14765,7 @@ mod tests {
 
     #[test]
     fn test_readdir_synthesizes_dot_entries() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         host.dir_entry_count = 0; // no host entries
@@ -14802,7 +14791,7 @@ mod tests {
 
     #[test]
     fn test_pipe_buf_atomicity() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (_read_fd, write_fd) = sys_pipe(&mut proc).unwrap();
@@ -14823,7 +14812,7 @@ mod tests {
 
     #[test]
     fn test_tiocgpgrp_tiocspgrp() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut buf = [0u8; 4];
 
@@ -14844,7 +14833,7 @@ mod tests {
 
     #[test]
     fn test_tiocgpgrp_not_tty() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 4];
@@ -14859,7 +14848,7 @@ mod tests {
 
     #[test]
     fn test_realpath_resolves_symlink() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // Custom mock where /tmp/mylink is a symlink to /tmp/realfile
         struct SymlinkMock;
         impl HostIO for SymlinkMock {
@@ -14955,7 +14944,7 @@ mod tests {
 
     #[test]
     fn test_realpath_eloop() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // Mock where /tmp/loop1 -> /tmp/loop2 -> /tmp/loop1 (circular)
         struct LoopMock;
         impl HostIO for LoopMock {
@@ -15041,7 +15030,7 @@ mod tests {
 
     #[test]
     fn test_realpath_relative_symlink() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         // Mock where /a/b/sym -> ../c/target (relative symlink)
         struct RelSymlinkMock;
         impl HostIO for RelSymlinkMock {
@@ -15138,7 +15127,7 @@ mod tests {
 
     #[test]
     fn test_sa_siginfo_flag_stored() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::signal::*;
         let mut proc = Process::new(1);
         // Set handler with SA_SIGINFO flag
@@ -15152,7 +15141,6 @@ mod tests {
 
     #[test]
     fn test_rt_signal_queuing() {
-        let _kernel_test_guard = crate::test_lock::lock();
         let mut state = crate::signal::SignalState::new();
         let rt_sig = 34u32; // SIGRTMIN + 2
 
@@ -15171,7 +15159,6 @@ mod tests {
 
     #[test]
     fn test_standard_signal_coalesced() {
-        let _kernel_test_guard = crate::test_lock::lock();
         let mut state = crate::signal::SignalState::new();
         use wasm_posix_shared::signal::SIGUSR1;
 
@@ -15187,7 +15174,6 @@ mod tests {
 
     #[test]
     fn test_rt_signal_ordering() {
-        let _kernel_test_guard = crate::test_lock::lock();
         let mut state = crate::signal::SignalState::new();
         let rt1 = 33u32;
         let rt2 = 34u32;
@@ -15204,7 +15190,6 @@ mod tests {
 
     #[test]
     fn test_rt_signal_clear_removes_all() {
-        let _kernel_test_guard = crate::test_lock::lock();
         let mut state = crate::signal::SignalState::new();
         let rt_sig = 35u32;
 
@@ -15220,7 +15205,6 @@ mod tests {
 
     #[test]
     fn test_mixed_standard_and_rt_signals() {
-        let _kernel_test_guard = crate::test_lock::lock();
         use wasm_posix_shared::signal::SIGINT;
         let mut state = crate::signal::SignalState::new();
         let rt_sig = 40u32;
@@ -15241,7 +15225,7 @@ mod tests {
 
     #[test]
     fn test_synthetic_file_open_read_close() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/etc/passwd", O_RDONLY, 0).unwrap();
@@ -15264,7 +15248,7 @@ mod tests {
 
     #[test]
     fn test_synthetic_file_stat() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let st = sys_stat(&mut proc, &mut host, b"/etc/passwd").unwrap();
@@ -15275,7 +15259,7 @@ mod tests {
 
     #[test]
     fn test_synthetic_file_hosts() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/etc/hosts", O_RDONLY, 0).unwrap();
@@ -15289,7 +15273,7 @@ mod tests {
 
     #[test]
     fn test_synthetic_file_lseek() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/etc/passwd", O_RDONLY, 0).unwrap();
@@ -15313,7 +15297,7 @@ mod tests {
 
     #[test]
     fn test_synthetic_file_write_denied() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let result = sys_open(&mut proc, &mut host, b"/etc/passwd", O_WRONLY, 0);
@@ -15322,7 +15306,7 @@ mod tests {
 
     #[test]
     fn test_sysinfo() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut buf = [0u8; 312];
         sys_sysinfo(&mut buf).unwrap();
         // uptime = 1
@@ -15339,14 +15323,14 @@ mod tests {
 
     #[test]
     fn test_sysinfo_buffer_too_small() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut buf = [0u8; 100];
         assert_eq!(sys_sysinfo(&mut buf).unwrap_err(), Errno::EFAULT);
     }
 
     #[test]
     fn test_fcntl_lock_seek_end_non_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (_fd0, fd1) = sys_pipe(&mut proc).unwrap();
@@ -15367,7 +15351,7 @@ mod tests {
 
     #[test]
     fn test_memfd_create_basic() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let fd = sys_memfd_create(&mut proc, b"test", 0).unwrap();
         assert!(fd >= 0);
@@ -15380,7 +15364,7 @@ mod tests {
 
     #[test]
     fn test_memfd_write_read() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_memfd_create(&mut proc, b"test", 0).unwrap();
@@ -15403,7 +15387,7 @@ mod tests {
 
     #[test]
     fn test_memfd_ftruncate() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_memfd_create(&mut proc, b"trunc", 0).unwrap();
@@ -15428,7 +15412,7 @@ mod tests {
 
     #[test]
     fn test_memfd_lseek_end() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_memfd_create(&mut proc, b"seek", 0).unwrap();
@@ -15446,7 +15430,7 @@ mod tests {
 
     #[test]
     fn test_memfd_close_frees_buffer() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_memfd_create(&mut proc, b"close", 0).unwrap();
@@ -15461,7 +15445,7 @@ mod tests {
 
     #[test]
     fn test_memfd_invalid_flags() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let result = sys_memfd_create(&mut proc, b"bad", 0xFFFF);
         assert_eq!(result.unwrap_err(), Errno::EINVAL);
@@ -15469,7 +15453,7 @@ mod tests {
 
     #[test]
     fn test_copy_file_range_memfd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -15494,7 +15478,7 @@ mod tests {
 
     #[test]
     fn test_mremap_shrink_in_place() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         use wasm_posix_shared::mmap::{MAP_PRIVATE, MAP_ANONYMOUS, PROT_READ, PROT_WRITE};
         // mmap 3 pages
@@ -15508,7 +15492,7 @@ mod tests {
 
     #[test]
     fn test_mremap_grow_in_place() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         use wasm_posix_shared::mmap::{MAP_PRIVATE, MAP_ANONYMOUS, PROT_READ, PROT_WRITE};
         // mmap 1 page
@@ -15521,7 +15505,7 @@ mod tests {
 
     #[test]
     fn test_mremap_maymove() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         use wasm_posix_shared::mmap::{MAP_PRIVATE, MAP_ANONYMOUS, PROT_READ, PROT_WRITE};
         // mmap 1 page
@@ -15540,7 +15524,7 @@ mod tests {
 
     #[test]
     fn test_open_clofork_sets_fd_flag() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/clofork", O_CREAT | O_RDWR | O_CLOFORK, 0o644).unwrap();
@@ -15551,7 +15535,7 @@ mod tests {
 
     #[test]
     fn test_open_clofork_and_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/tmp/both", O_CREAT | O_RDWR | O_CLOFORK | O_CLOEXEC, 0o644).unwrap();
@@ -15562,7 +15546,7 @@ mod tests {
 
     #[test]
     fn test_pipe2_clofork() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (r, w) = sys_pipe2(&mut proc, O_CLOFORK).unwrap();
         let r_entry = proc.fd_table.get(r).unwrap();
@@ -15574,7 +15558,7 @@ mod tests {
 
     #[test]
     fn test_pipe2_clofork_and_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (r, w) = sys_pipe2(&mut proc, O_CLOFORK | O_CLOEXEC).unwrap();
         let r_entry = proc.fd_table.get(r).unwrap();
@@ -15585,7 +15569,7 @@ mod tests {
 
     #[test]
     fn test_dup3_clofork() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, _w) = sys_pipe(&mut proc).unwrap();
@@ -15598,7 +15582,7 @@ mod tests {
 
     #[test]
     fn test_dup3_clofork_and_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let (r, _w) = sys_pipe(&mut proc).unwrap();
@@ -15609,7 +15593,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_dupfd_clofork() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (r, _w) = sys_pipe(&mut proc).unwrap();
         let new_fd = sys_fcntl(&mut proc, r, F_DUPFD_CLOFORK, 0).unwrap();
@@ -15620,7 +15604,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_setfd_clofork() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (r, _w) = sys_pipe(&mut proc).unwrap();
         // Initially no flags
@@ -15634,7 +15618,7 @@ mod tests {
 
     #[test]
     fn test_fcntl_setfd_clofork_and_cloexec() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let (r, _w) = sys_pipe(&mut proc).unwrap();
         sys_fcntl(&mut proc, r, F_SETFD, FD_CLOFORK | FD_CLOEXEC).unwrap();
@@ -15644,7 +15628,7 @@ mod tests {
 
     #[test]
     fn test_fork_skips_clofork_fds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use crate::process_table::ProcessTable;
         let mut table = ProcessTable::new();
         // PID 1 is reserved for the virtual init process; use 100 for the test
@@ -15675,7 +15659,7 @@ mod tests {
 
     #[test]
     fn test_procfs_self_stat_open_read_close() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         proc.argv.push(b"test".to_vec());
         let mut host = MockHostIO::new();
@@ -15708,7 +15692,7 @@ mod tests {
 
     #[test]
     fn test_procfs_readlink_self() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(42);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 64];
@@ -15718,7 +15702,7 @@ mod tests {
 
     #[test]
     fn test_procfs_readlink_cwd() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let mut buf = [0u8; 64];
@@ -15728,7 +15712,7 @@ mod tests {
 
     #[test]
     fn test_procfs_stat_dir() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let st = sys_stat(&mut proc, &mut host, b"/proc").unwrap();
@@ -15738,7 +15722,7 @@ mod tests {
 
     #[test]
     fn test_procfs_lstat_self_symlink() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         let st = sys_lstat(&mut proc, &mut host, b"/proc/self").unwrap();
@@ -15747,7 +15731,7 @@ mod tests {
 
     #[test]
     fn test_procfs_fd_dir_getdents64() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -15768,7 +15752,7 @@ mod tests {
 
     #[test]
     fn test_procfs_access() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
 
@@ -15787,7 +15771,7 @@ mod tests {
 
     #[test]
     fn test_procfs_open_write_fails() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         let mut proc = Process::new(1);
         let mut host = MockHostIO::new();
         assert_eq!(
@@ -15798,7 +15782,6 @@ mod tests {
 
     #[test]
     fn match_virtual_device_recognizes_fb0() {
-        let _kernel_test_guard = crate::test_lock::lock();
         assert_eq!(match_virtual_device(b"/dev/fb0"), Some(VirtualDevice::Fb0));
         // Single-fb only — no /dev/fb1 yet.
         assert_eq!(match_virtual_device(b"/dev/fb1"), None);
@@ -15806,7 +15789,6 @@ mod tests {
 
     #[test]
     fn fb0_has_unique_host_handle_sentinel() {
-        let _kernel_test_guard = crate::test_lock::lock();
         let h = VirtualDevice::Fb0.host_handle();
         assert_eq!(VirtualDevice::from_host_handle(h), Some(VirtualDevice::Fb0));
         assert_ne!(h, VirtualDevice::Null.host_handle());
@@ -15817,7 +15799,6 @@ mod tests {
 
     #[test]
     fn fb0_stat_is_chr() {
-        let _kernel_test_guard = crate::test_lock::lock();
         let st = virtual_device_stat(VirtualDevice::Fb0, 0, 0);
         assert_eq!(st.st_mode & wasm_posix_shared::mode::S_IFMT,
                    wasm_posix_shared::mode::S_IFCHR);
@@ -15829,7 +15810,7 @@ mod tests {
 
     #[test]
     fn fbioget_vscreeninfo_returns_640x400_bgra32() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::fbdev::*;
         use core::sync::atomic::Ordering;
         let _g = FB0_OWNER_LOCK.lock().unwrap();
@@ -15854,7 +15835,7 @@ mod tests {
 
     #[test]
     fn fbioget_fscreeninfo_reports_correct_smem_len() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::fbdev::*;
         use core::sync::atomic::Ordering;
         let _g = FB0_OWNER_LOCK.lock().unwrap();
@@ -15877,7 +15858,7 @@ mod tests {
 
     #[test]
     fn fbiopan_display_succeeds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::fbdev::*;
         use core::sync::atomic::Ordering;
         let _g = FB0_OWNER_LOCK.lock().unwrap();
@@ -15893,7 +15874,7 @@ mod tests {
 
     #[test]
     fn fbioput_vscreeninfo_rejects_mismatched_geometry() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use wasm_posix_shared::fbdev::*;
         use core::sync::atomic::Ordering;
         let _g = FB0_OWNER_LOCK.lock().unwrap();
@@ -15920,7 +15901,7 @@ mod tests {
 
     #[test]
     fn unknown_fb_ioctl_returns_enotty() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use core::sync::atomic::Ordering;
         let _g = FB0_OWNER_LOCK.lock().unwrap();
         crate::process_table::FB0_OWNER.store(-1, Ordering::SeqCst);
@@ -15936,7 +15917,7 @@ mod tests {
 
     #[test]
     fn write_fb0_lazy_binds_and_forwards_pixels() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use core::sync::atomic::Ordering;
         use wasm_posix_shared::flags::O_RDWR;
         let _g = FB0_OWNER_LOCK.lock().unwrap();
@@ -15982,7 +15963,7 @@ mod tests {
 
     #[test]
     fn mmap_fb0_records_binding_and_calls_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use core::sync::atomic::Ordering;
         use wasm_posix_shared::flags::O_RDWR;
         use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
@@ -16016,7 +15997,7 @@ mod tests {
 
     #[test]
     fn second_mmap_of_fb0_returns_einval() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use core::sync::atomic::Ordering;
         use wasm_posix_shared::flags::O_RDWR;
         use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
@@ -16038,7 +16019,7 @@ mod tests {
 
     #[test]
     fn mmap_fb0_with_wrong_length_returns_einval() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use core::sync::atomic::Ordering;
         use wasm_posix_shared::flags::O_RDWR;
         use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
@@ -16060,7 +16041,7 @@ mod tests {
 
     #[test]
     fn munmap_of_fb_region_clears_binding_and_unbinds_host() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use core::sync::atomic::Ordering;
         use wasm_posix_shared::flags::O_RDWR;
         use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
@@ -16084,7 +16065,7 @@ mod tests {
 
     #[test]
     fn execve_releases_fb_binding_and_unbinds() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use core::sync::atomic::Ordering;
         use wasm_posix_shared::flags::O_RDWR;
         use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
@@ -16106,7 +16087,7 @@ mod tests {
 
     #[test]
     fn open_dev_fb0_is_single_owner() {
-        let _kernel_test_guard = crate::test_lock::lock();
+        let _guard = crate::test_lock::lock();
         use core::sync::atomic::Ordering;
         let _g = FB0_OWNER_LOCK.lock().unwrap();
         // Reset state in case a prior test (with a poisoned lock) left the
