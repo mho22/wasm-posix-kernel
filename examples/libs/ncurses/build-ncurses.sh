@@ -159,13 +159,22 @@ STUB
         xterm-256color xterm vt100 dumb \
         > "$WASM_BUILD_DIR/ncurses/fallback.c" 2>/dev/null
 
-    # Recompile fallback.o and update the library
+    # MKfallback.sh's `sed -e 's/\<short\>/NCURSES_INT2/g'` uses GNU-only
+    # word boundaries that BSD sed (macOS default) silently passes through.
+    # Without this rewrite, *_number_data arrays stay typed `short`, which
+    # is incompatible with TERMTYPE2.Numbers (`int *`) when the wasm build
+    # has NCURSES_EXT_NUMBERS=1 (as enabled here via --enable-widec).
+    perl -i -pe 's/\bshort\b/NCURSES_INT2/g' "$WASM_BUILD_DIR/ncurses/fallback.c"
+
+    # Recompile fallback.o and update the library. Don't pipe through
+    # `grep -v warning` — that silently masks compile errors, including
+    # the upstream MKfallback short/int regression we work around above.
     (
         cd "$WASM_BUILD_DIR"
         wasm32posix-cc -I./ncurses -I./include -I"$SRC_DIR/ncurses" -I"$SRC_DIR/include" \
             -DHAVE_CONFIG_H -DNDEBUG -O2 -DNCURSES_STATIC -DUSE_TERMLIB \
-            -c ncurses/fallback.c -o objects/fallback.o 2>&1 | grep -v warning || true
-        wasm32posix-ar r lib/libtinfow.a objects/fallback.o 2>&1
+            -c ncurses/fallback.c -o objects/fallback.o
+        wasm32posix-ar r lib/libtinfow.a objects/fallback.o
         wasm32posix-ranlib lib/libtinfow.a
     )
     echo "==> Fallback entries compiled"
