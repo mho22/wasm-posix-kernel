@@ -6189,6 +6189,16 @@ export class CentralizedKernelWorker {
   }
 
   /**
+   * Push a mouse event into the kernel's `/dev/input/mice` queue. The
+   * kernel buffers a 3-byte PS/2 frame; any process blocked in
+   * `read()` or `poll()` on the device is woken on the next retry tick.
+   */
+  injectMouseEvent(dx: number, dy: number, buttons: number): void {
+    this.kernel.injectMouseEvent(dx, dy, buttons);
+    this.scheduleWakeBlockedRetries();
+  }
+
+  /**
    * ABI version the kernel advertised at startup via its
    * `__abi_version` export. Worker processes compare against this
    * and refuse to run programs built against an incompatible ABI.
