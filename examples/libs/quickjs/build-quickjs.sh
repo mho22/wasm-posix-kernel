@@ -145,8 +145,15 @@ for src in "${QJS_CLI_SRCS[@]}"; do
     CLI_OBJS+=("$obj")
 done
 
+# lld defaults to a 1 MiB wasm stack-first layout. QuickJS records the wasm
+# __stack_pointer at JS_NewContext as `stack_top`, then enforces a 1 MiB
+# JS_DEFAULT_STACK_SIZE budget — leaving zero headroom against the lld
+# default and tripping "Maximum call stack size exceeded" on the first call.
+# Switch to stack-last (no collision with --global-base) and bump to 8 MiB.
+QJS_STACK_FLAGS=(-Wl,--no-stack-first -Wl,-z,stack-size=8388608)
+
 echo "Linking qjs..."
-$CC "${CLI_OBJS[@]}" "${OBJS[@]}" -lm -o "$BIN_DIR/qjs.wasm"
+$CC "${CLI_OBJS[@]}" "${OBJS[@]}" -lm "${QJS_STACK_FLAGS[@]}" -o "$BIN_DIR/qjs.wasm"
 
 # Asyncify for fork support
 echo "Applying asyncify to qjs..."
@@ -177,7 +184,7 @@ $CC "${CFLAGS[@]}" -c "$SRC_DIR/gen/repl.c" -o "$BIN_DIR/repl-node.o"
 NODE_OBJS+=("$BIN_DIR/repl-node.o")
 
 echo "Linking node..."
-$CC "${NODE_OBJS[@]}" "${OBJS[@]}" -lm -o "$BIN_DIR/node.wasm"
+$CC "${NODE_OBJS[@]}" "${OBJS[@]}" -lm "${QJS_STACK_FLAGS[@]}" -o "$BIN_DIR/node.wasm"
 
 # Asyncify for fork support
 echo "Applying asyncify to node..."
