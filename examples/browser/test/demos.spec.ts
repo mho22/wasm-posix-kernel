@@ -131,6 +131,13 @@ int main(void) {
   writeFileSync(setjmpSrc, SOURCE);
   execSync(`wasm32posix-cc "${setjmpSrc}" -o "${setjmpOut}"`, { stdio: "pipe" });
   await page.goto("/");
+  await page.evaluate(() => {
+    const sel = document.getElementById("program") as HTMLSelectElement;
+    const opt = document.createElement("option");
+    opt.value = "setjmp";
+    opt.textContent = "setjmp";
+    sel.appendChild(opt);
+  });
   await page.selectOption("#program", "setjmp");
   await page.click("#run");
   await waitForText(page, "#output", "Exited with code 0");

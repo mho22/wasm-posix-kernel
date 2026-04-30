@@ -435,14 +435,8 @@ export class WasmPosixKernel {
             this.readKernelBytes(Number(srcPtr), Number(len)),
           );
         },
-        // /dev/dri/renderD128 hooks. The kernel surface (Phase A) declares
-        // these imports so its v7 ABI is stable; the real bridge — context
-        // registry, cmdbuf decoder, GLES backend — lands in Phase B's host
-        // PR. Until then the host-side stubs are no-ops that satisfy the
-        // wasm linker so the kernel module instantiates. Returning 0 from
-        // host_gl_query mirrors a successful zero-byte query result, which
-        // is the safest behavior for any caller that reaches this path
-        // before Phase B (no GL programs ship in Phase A's gauntlet).
+        // /dev/dri/renderD128 stubs — satisfy the v7 kernel's host_gl_*
+        // imports so the module instantiates. Real GL bridge lands in Phase B.
         host_gl_bind: (_pid: number, _addr: bigint, _len: bigint): void => {},
         host_gl_unbind: (_pid: number): void => {},
         host_gl_create_context: (
