@@ -373,9 +373,8 @@ fn handle_gl_ioctl(
         }
         GLIO_TERMINATE => {
             if let Some(mut state) = proc.gl_state.take() {
-                if let Some(_b) = state.cmdbuf.take() {
+                if state.cmdbuf.take().is_some() {
                     host.gl_unbind(pid);
-                    proc.gl_binding = None;
                 }
                 if let Some(c) = state.context_id.take() {
                     host.gl_destroy_context(pid, c);
@@ -871,10 +870,12 @@ pub fn sys_close(
         maybe_release_fb0(proc.pid);
     }
 
-    // Same release rule for /dev/dri/renderD128.
+    // Same release rule for /dev/dri/renderD128. The cmdbuf mmap (if any)
+    // is recorded in `proc.gl_state.cmdbuf`; mmap outlives fd close, so
+    // only drop ownership when both fd and mmap are gone.
     if file_type == FileType::CharDevice
         && VirtualDevice::from_host_handle(host_handle) == Some(VirtualDevice::DriRender0)
-        && proc.gl_binding.is_none()
+        && proc.gl_state.as_ref().map_or(true, |s| s.cmdbuf.is_none())
         && !proc_has_dri_render0_fd(proc)
     {
         maybe_release_dri_render0(proc.pid);
@@ -3520,16 +3521,15 @@ pub fn sys_execve(proc: &mut Process, host: &mut dyn HostIO, path: &[u8]) -> Res
     // new image must run GLIO_INIT itself to re-establish a session.
     let pid_i32 = proc.pid as i32;
     if let Some(mut state) = proc.gl_state.take() {
+        if state.cmdbuf.take().is_some() {
+            host.gl_unbind(pid_i32);
+        }
         if let Some(c) = state.context_id.take() {
             host.gl_destroy_context(pid_i32, c);
         }
         if let Some(s) = state.surface_id.take() {
             host.gl_destroy_surface(pid_i32, s);
         }
-    }
-    if proc.gl_binding.is_some() {
-        host.gl_unbind(pid_i32);
-        proc.gl_binding = None;
     }
     maybe_release_dri_render0(proc.pid);
     // Resolve relative paths against process CWD so the host sees absolute paths.
@@ -4309,7 +4309,7 @@ pub fn sys_mmap(
             if !state.initialized {
                 return Err(Errno::EINVAL);
             }
-            if state.cmdbuf.is_some() || proc.gl_binding.is_some() {
+            if state.cmdbuf.is_some() {
                 return Err(Errno::EINVAL);
             }
             if len != wasm_posix_shared::gl::CMDBUF_LEN {
@@ -4320,17 +4320,12 @@ pub fn sys_mmap(
             if addr_out == MAP_FAILED {
                 return Err(Errno::ENOMEM);
             }
-            proc.gl_binding = Some(crate::process::GlBinding {
-                cmdbuf_addr: addr_out,
-                cmdbuf_len: len,
+            // Unwrap is safe: as_ref above already returned Ok.
+            proc.gl_state.as_mut().unwrap().cmdbuf = Some(crate::ofd::CmdbufBinding {
+                addr: addr_out,
+                len,
+                submit_seq: 0,
             });
-            if let Some(s) = proc.gl_state.as_mut() {
-                s.cmdbuf = Some(crate::ofd::CmdbufBinding {
-                    addr: addr_out,
-                    len,
-                    submit_seq: 0,
-                });
-            }
             host.gl_bind(proc.pid as i32, addr_out, len);
             return Ok(addr_out);
         }
@@ -4388,17 +4383,17 @@ pub fn sys_munmap(
     }
 
     // /dev/dri/renderD128 cleanup: same shape as the Fb0 release above.
-    // The cmdbuf record on `gl_state` is cleared in lockstep so a
-    // subsequent GLIO_SUBMIT correctly errors with EINVAL.
-    let gl_release = if let Some(b) = proc.gl_binding {
-        let end = addr.saturating_add(len);
-        let b_end = b.cmdbuf_addr.saturating_add(b.cmdbuf_len);
-        addr <= b.cmdbuf_addr && end >= b_end
-    } else {
-        false
-    };
+    // The cmdbuf record lives on `gl_state.cmdbuf`; clearing it makes a
+    // subsequent GLIO_SUBMIT correctly error with EINVAL.
+    let gl_release = proc.gl_state.as_ref()
+        .and_then(|s| s.cmdbuf.as_ref())
+        .map(|c| {
+            let end = addr.saturating_add(len);
+            let c_end = c.addr.saturating_add(c.len);
+            addr <= c.addr && end >= c_end
+        })
+        .unwrap_or(false);
     if gl_release {
-        proc.gl_binding = None;
         if let Some(s) = proc.gl_state.as_mut() {
             s.cmdbuf = None;
         }
@@ -16281,14 +16276,15 @@ mod tests {
         let mut host = TrackingHostIO::new();
         let input = [0xAAu8, 0xBB, 0xCC, 0xDD];
         let mut out = [0u8; 8];
-        let n = host.gl_query(3, wasm_posix_shared::gl::QOP_GET_ERROR, &input, &mut out);
+        // Op tag is opaque to the kernel — the host owns the QOP_* table.
+        let n = host.gl_query(3, 1, &input, &mut out);
         // TrackingHostIO echoes 4 deterministic bytes regardless of op.
         assert_eq!(n, 4);
         assert_eq!(&out[..4], &[0xDE, 0xAD, 0xBE, 0xEF]);
         assert_eq!(host.gl_query_calls.len(), 1);
         let call = &host.gl_query_calls[0];
         assert_eq!(call.pid, 3);
-        assert_eq!(call.op, wasm_posix_shared::gl::QOP_GET_ERROR);
+        assert_eq!(call.op, 1);
         assert_eq!(call.input, input);
         assert_eq!(call.out_len, 8);
     }
@@ -16426,7 +16422,7 @@ mod tests {
         let fd = open_gl(&mut p, &mut h);
         init_ctx_surface_and_make_current(&mut p, &mut h, fd);
         let qi = GlQueryInfo {
-            op: QOP_GET_ERROR,
+            op: 1, // opaque to the kernel
             in_buf_ptr: 0, in_buf_len: 0,
             out_buf_ptr: 0, out_buf_len: MAX_QUERY_OUT_LEN + 1,
             reserved: 0,
@@ -16448,7 +16444,7 @@ mod tests {
         let fd = open_gl(&mut p, &mut h);
         init_ctx_surface_and_make_current(&mut p, &mut h, fd);
         let qi = GlQueryInfo {
-            op: QOP_GET_ERROR,
+            op: 1,
             in_buf_ptr: 0, in_buf_len: 0,
             out_buf_ptr: 0, out_buf_len: 4,
             reserved: 0,
@@ -16458,7 +16454,7 @@ mod tests {
         sys_ioctl(&mut p, &mut h, fd, GLIO_QUERY, &mut buf).unwrap();
         assert_eq!(h.gl_query_calls.len(), 1);
         let call = &h.gl_query_calls[0];
-        assert_eq!(call.op, QOP_GET_ERROR);
+        assert_eq!(call.op, 1);
         assert_eq!(call.out_len, 4);
     }
 
@@ -16587,10 +16583,6 @@ mod tests {
                             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
         assert_ne!(addr, 0);
 
-        let b = p.gl_binding.expect("gl_binding should be Some after mmap");
-        assert_eq!(b.cmdbuf_addr, addr);
-        assert_eq!(b.cmdbuf_len, CMDBUF_LEN);
-
         let cb = p.gl_state.as_ref().unwrap().cmdbuf.expect("cmdbuf record");
         assert_eq!(cb.addr, addr);
         assert_eq!(cb.len, CMDBUF_LEN);
@@ -16613,7 +16605,7 @@ mod tests {
         let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
         assert_eq!(err, Errno::EINVAL);
-        assert!(p.gl_binding.is_none());
+        assert!(p.gl_state.is_none());
         assert!(h.gl_bind_calls.is_empty());
     }
 
@@ -16629,7 +16621,7 @@ mod tests {
         let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN + 4096,
                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
         assert_eq!(err, Errno::EINVAL);
-        assert!(p.gl_binding.is_none());
+        assert!(p.gl_state.as_ref().unwrap().cmdbuf.is_none());
         assert!(h.gl_bind_calls.is_empty());
     }
 
@@ -16665,7 +16657,6 @@ mod tests {
         let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
                             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
         sys_munmap(&mut p, &mut h, addr, CMDBUF_LEN).unwrap();
-        assert!(p.gl_binding.is_none());
         assert!(p.gl_state.as_ref().unwrap().cmdbuf.is_none());
         assert_eq!(h.gl_unbind_calls, alloc::vec![p.pid as i32]);
         // The fd is still open so ownership is retained until close.
@@ -16710,7 +16701,6 @@ mod tests {
         let _addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
                              PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
         sys_execve(&mut p, &mut h, b"/bin/sh").unwrap();
-        assert!(p.gl_binding.is_none());
         assert!(p.gl_state.is_none());
         assert_eq!(h.gl_unbind_calls, alloc::vec![p.pid as i32]);
         assert_eq!(h.gl_destroy_context_calls, alloc::vec![(p.pid as i32, 1u32)]);
@@ -16731,11 +16721,11 @@ mod tests {
 
     #[test]
     fn fork_child_image_does_not_inherit_gl_state() {
-        // The fork.rs deserialization sets `gl_binding: None` and
-        // `gl_state: None` for both the fork-child Process literal and
-        // the exec literal. Round-trip a parent with a live GL session
-        // and assert the child snapshot drops it. Mirrors the existing
-        // FB0 fork behaviour (see deserialize_fork_state in fork.rs).
+        // The fork.rs deserialization sets `gl_state: None` for both the
+        // fork-child Process literal and the exec literal. Round-trip a
+        // parent with a live GL session and assert the child snapshot
+        // drops it. Mirrors the existing FB0 fork behaviour (see
+        // deserialize_fork_state in fork.rs).
         use crate::fork::{serialize_fork_state, deserialize_fork_state};
         let _g = gl_owner_reset();
         let mut parent = Process::new(11);
@@ -16747,7 +16737,6 @@ mod tests {
         let n = serialize_fork_state(&parent, &mut buf).unwrap();
         let child = deserialize_fork_state(&buf[..n], /* child_pid */ 12).unwrap();
 
-        assert!(child.gl_binding.is_none());
         assert!(child.gl_state.is_none());
         // Parent's session is untouched.
         assert!(parent.gl_state.is_some());
