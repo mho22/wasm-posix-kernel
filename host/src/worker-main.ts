@@ -446,6 +446,26 @@ function buildImportObject(
     for (let i = 0; i < count; i++) view.setBigUint64(begin + i * 8, arr[i], true);
   };
 
+  // Synthesize WebAssembly.Tag imports for -mexception-handling toolchains
+  // (setjmp/longjmp + C++ throws). Without this: "LinkError: tag import
+  // requires a WebAssembly.Tag".
+  const TagCtor = (WebAssembly as unknown as {
+    Tag?: new (descriptor: { parameters: string[] }) => unknown;
+  }).Tag;
+  if (TagCtor) {
+    const tagSigs: Record<string, string[]> = {
+      __c_longjmp: ["i32"],
+      __cpp_exception: ["i32"],
+    };
+    for (const imp of WebAssembly.Module.imports(module)) {
+      if ((imp.kind as string) !== "tag") continue;
+      const params = tagSigs[imp.name];
+      if (imp.module === "env" && params && !envImports[imp.name]) {
+        envImports[imp.name] = new TagCtor({ parameters: params }) as never;
+      }
+    }
+  }
+
   // Stub any remaining unresolved function imports
   for (const imp of WebAssembly.Module.imports(module)) {
     if (imp.kind !== "function") continue;
