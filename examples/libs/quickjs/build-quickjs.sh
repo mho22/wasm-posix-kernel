@@ -110,8 +110,11 @@ fi
 # Step 2: Compile bootstrap.js to bytecode C array
 # ----------------------------------------------------------------
 echo "Compiling Node.js bootstrap to bytecode..."
+# -M qjs:node tells qjsc the module is external (linked in via node.wasm),
+# so bytecode emission doesn't try to resolve it at compile time.
 "$QJSC" -m \
     -N qjsc_bootstrap \
+    -M qjs:node \
     -o "$GEN_DIR/node-bootstrap.c" \
     "$SCRIPT_DIR/node-compat/bootstrap.js"
 echo "Bootstrap bytecode generated: $GEN_DIR/node-bootstrap.c"
@@ -183,8 +186,29 @@ NODE_OBJS+=("$BIN_DIR/node-bootstrap.o")
 $CC "${CFLAGS[@]}" -c "$SRC_DIR/gen/repl.c" -o "$BIN_DIR/repl-node.o"
 NODE_OBJS+=("$BIN_DIR/repl-node.o")
 
+OPENSSL_PREFIX="$SCRIPT_DIR/../openssl/openssl-install"
+if [ ! -f "$OPENSSL_PREFIX/lib/libcrypto.a" ]; then
+    echo "ERROR: libcrypto.a not found at $OPENSSL_PREFIX/lib/. Run examples/libs/openssl/build-openssl.sh first."
+    exit 1
+fi
+
+NODE_NATIVE_SRCS=(
+    "$SCRIPT_DIR/node-compat-native/node-native.c"
+    "$SCRIPT_DIR/node-compat-native/hash.c"
+)
+NODE_NATIVE_CFLAGS=(
+    "${CFLAGS[@]}"
+    -I"$OPENSSL_PREFIX/include"
+)
+for src in "${NODE_NATIVE_SRCS[@]}"; do
+    obj="$BIN_DIR/$(basename "${src%.c}.o")"
+    $CC "${NODE_NATIVE_CFLAGS[@]}" -c "$src" -o "$obj"
+    NODE_OBJS+=("$obj")
+done
+
 echo "Linking node..."
-$CC "${NODE_OBJS[@]}" "${OBJS[@]}" -lm "${QJS_STACK_FLAGS[@]}" -o "$BIN_DIR/node.wasm"
+$CC "${NODE_OBJS[@]}" "${OBJS[@]}" "$OPENSSL_PREFIX/lib/libcrypto.a" -lm \
+    "${QJS_STACK_FLAGS[@]}" -o "$BIN_DIR/node.wasm"
 
 # Asyncify for fork support
 echo "Applying asyncify to node..."

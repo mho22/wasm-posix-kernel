@@ -7,6 +7,7 @@
 
 import * as std from 'qjs:std';
 import * as os from 'qjs:os';
+import * as _nodeNative from 'qjs:node';
 
 // ============================================================
 // TextEncoder/TextDecoder polyfill for QuickJS
@@ -100,16 +101,16 @@ if (typeof globalThis.atob === 'undefined') {
 
     globalThis.btoa = function(str) {
         let result = '';
-        let i = 0;
-        while (i < str.length) {
-            const a = str.charCodeAt(i++);
-            const b = i < str.length ? str.charCodeAt(i++) : 0;
-            const c = i < str.length ? str.charCodeAt(i++) : 0;
+        const len = str.length;
+        for (let i = 0; i < len; i += 3) {
+            const a = str.charCodeAt(i);
+            const b = i + 1 < len ? str.charCodeAt(i + 1) : 0;
+            const c = i + 2 < len ? str.charCodeAt(i + 2) : 0;
             const triple = (a << 16) | (b << 8) | c;
             result += _b64chars[(triple >> 18) & 0x3F];
             result += _b64chars[(triple >> 12) & 0x3F];
-            result += (i > str.length + 1) ? '=' : _b64chars[(triple >> 6) & 0x3F];
-            result += (i > str.length) ? '=' : _b64chars[triple & 0x3F];
+            result += i + 1 < len ? _b64chars[(triple >> 6) & 0x3F] : '=';
+            result += i + 2 < len ? _b64chars[triple & 0x3F] : '=';
         }
         return result;
     };
@@ -2113,22 +2114,15 @@ const crypto = (() => {
     }
 
     function createHash(algorithm) {
-        // Stub - would need native hash implementation
-        const chunks = [];
+        const native = _nodeNative.createHash(algorithm);
         return {
             update(data) {
-                chunks.push(typeof data === 'string' ? Buffer.from(data) : data);
+                native.update(data);
                 return this;
             },
             digest(encoding) {
-                // TODO: implement actual hashing
-                const buf = Buffer.concat(chunks);
-                const hash = Buffer.alloc(32);
-                for (let i = 0; i < buf.length; i++) {
-                    hash[i % 32] ^= buf[i];
-                }
-                if (encoding) return hash.toString(encoding);
-                return hash;
+                const buf = Buffer.from(native.digest());
+                return encoding ? buf.toString(encoding) : buf;
             },
         };
     }
