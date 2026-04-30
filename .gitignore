@@ -1,5 +1,5 @@
-# Claude
-.claude/
+# Claude — track project-level skills/commands/agents, keep per-user settings private
+.claude/settings.local.json
 
 # Build artifacts
 /target

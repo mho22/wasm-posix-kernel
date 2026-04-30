@@ -1,5 +1,15 @@
 # wasm-posix-kernel
 
+## Engineering skill — load before any work
+
+**At the very start of every interaction in this repo, before any other tool call, invoke the `kandelo-engineering` skill via the `Skill` tool.** Re-invoke it at the start of every new task within the same session.
+
+The skill encodes how this project is built — the design → plan → implementation 3-PR workflow, branch / commit / PR conventions, POSIX-first decision rule, the 6-suite test gauntlet, "never compromise hosted software", ABI versioning discipline, and the devil's-advocate review that gates every push. CLAUDE.md is the always-on context; the skill is the source of truth for *how to work*.
+
+If the skill is not in your available-skills list, stop and tell the user — do not improvise the workflow.
+
+Skill location: `.claude/skills/kandelo-engineering/SKILL.md`.
+
 ## Test Verification
 
 **ALL of these must pass before claiming "tests pass" or completing any branch:**
