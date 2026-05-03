@@ -32,6 +32,14 @@ use crate::process::Process;
 /// framebuffer region, or exits.
 pub static FB0_OWNER: AtomicI32 = AtomicI32::new(-1);
 
+/// Owning pid of `/dev/dri/renderD128`, or `-1` if no process holds it.
+///
+/// Same single-open semantics as `FB0_OWNER`: the second `open` from a
+/// different pid returns `EBUSY`. The owner is released when the owning
+/// process closes its last `/dev/dri/renderD128` fd, `munmap`s its GL
+/// cmdbuf region, or exits/execs (the exit/exec hook lands in Task A8).
+pub static GL_DEVICE_OWNER: AtomicI32 = AtomicI32::new(-1);
+
 /// Table of all processes managed by the centralized kernel.
 ///
 /// In centralized mode (mode=1), the kernel manages multiple processes.

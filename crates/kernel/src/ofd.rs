@@ -55,6 +55,42 @@ pub fn host_handle_close_ref(h: i64) -> bool {
 /// The set of flags that F_SETFL is allowed to modify (POSIX semantics).
 const SETFL_MODIFIABLE: u32 = O_APPEND | O_NONBLOCK;
 
+/// Live cmdbuf mapping for a process's GL fd.
+///
+/// Populated by the GLIO_INIT path (A6) and the mmap path (A7). The
+/// `submit_seq` counter is bumped by every successful `GLIO_SUBMIT` and
+/// is used for host-side debug-ring correlation.
+#[derive(Clone, Copy, Debug)]
+pub struct CmdbufBinding {
+    /// Offset within the process's wasm `Memory`.
+    pub addr: usize,
+    /// Length in bytes (`shared::gl::CMDBUF_LEN`).
+    pub len: usize,
+    /// Monotonic `GLIO_SUBMIT` counter — used for host-side debug ring
+    /// correlation, never read by user space.
+    pub submit_seq: u64,
+}
+
+/// Per-process GL state for the open `/dev/dri/renderD128` handle.
+///
+/// v1's `GL_DEVICE_OWNER` enforces single-process ownership of the device,
+/// so this state lives directly on `Process` rather than on each OFD —
+/// re-opens by the same process share one logical state, matching how
+/// `Process::fb_binding` mirrors a single fbdev mmap.
+#[derive(Clone, Debug, Default)]
+pub struct GlState {
+    /// Set after `GLIO_INIT` succeeded.
+    pub initialized: bool,
+    /// Allocated by `GLIO_CREATE_CONTEXT`. One per process in v1.
+    pub context_id: Option<u32>,
+    /// Allocated by `GLIO_CREATE_SURFACE`.
+    pub surface_id: Option<u32>,
+    /// Set after `GLIO_MAKE_CURRENT`.
+    pub current: bool,
+    /// Set when the cmdbuf has been mmap'd (A7).
+    pub cmdbuf: Option<CmdbufBinding>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
     Regular,

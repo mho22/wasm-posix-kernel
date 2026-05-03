@@ -935,6 +935,10 @@ pub fn deserialize_fork_state(buf: &[u8], child_pid: u32) -> Result<Process, Err
         // registered as a host display target. fbDOOM doesn't fork
         // mid-game; documented limitation in the design doc.
         fb_binding: None,
+        // Same single-owner rule for /dev/dri/renderD128 (GL_DEVICE_OWNER):
+        // GL session state and the cmdbuf mmap recorded in it are not
+        // inherited across fork.
+        gl_state: None,
     })
 }
 
@@ -1313,6 +1317,9 @@ pub fn deserialize_exec_state(buf: &[u8], pid: u32) -> Result<Process, Errno> {
         // exec wipes any prior framebuffer binding — the new program
         // must open and mmap /dev/fb0 itself.
         fb_binding: None,
+        // Same: exec wipes the GL session and any cmdbuf mmap recorded in
+        // it — the new program must run GLIO_INIT itself.
+        gl_state: None,
     })
 }
 

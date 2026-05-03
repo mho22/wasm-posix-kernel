@@ -261,6 +261,7 @@ fn channel_signal_area() -> Value {
 fn marshalled_structs() -> Value {
     use shared::{WasmDirent, WasmFlock, WasmPollFd, WasmStat, WasmStatfs, WasmTimespec};
     use shared::fbdev::{FbBitfield, FbFixScreenInfo, FbVarScreenInfo};
+    use shared::gl::{GlContextAttrs, GlQueryInfo, GlSubmitInfo, GlSurfaceAttrs};
 
     let mut structs: JsonMap = BTreeMap::new();
     structs.insert(
@@ -319,6 +320,24 @@ fn marshalled_structs() -> Value {
             xpanstep, ypanstep, ywrapstep, _pad,
             line_length, mmio_start, mmio_len, accel,
             capabilities, reserved, _pad_to_80,
+        }),
+    );
+    structs.insert(
+        "GlSubmitInfo".into(),
+        struct_layout!(GlSubmitInfo { offset, length }),
+    );
+    structs.insert(
+        "GlContextAttrs".into(),
+        struct_layout!(GlContextAttrs { client_version, reserved }),
+    );
+    structs.insert(
+        "GlSurfaceAttrs".into(),
+        struct_layout!(GlSurfaceAttrs { kind, width, height, config_id, reserved }),
+    );
+    structs.insert(
+        "GlQueryInfo".into(),
+        struct_layout!(GlQueryInfo {
+            op, in_buf_ptr, in_buf_len, out_buf_ptr, out_buf_len, reserved,
         }),
     );
 

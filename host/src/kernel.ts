@@ -435,6 +435,32 @@ export class WasmPosixKernel {
             this.readKernelBytes(Number(srcPtr), Number(len)),
           );
         },
+        // /dev/dri/renderD128 stubs — satisfy the v7 kernel's host_gl_*
+        // imports so the module instantiates. Real GL bridge lands in Phase B.
+        host_gl_bind: (_pid: number, _addr: bigint, _len: bigint): void => {},
+        host_gl_unbind: (_pid: number): void => {},
+        host_gl_create_context: (
+          _pid: number, _ctxId: number,
+          _attrsPtr: bigint, _attrsLen: bigint,
+        ): void => {},
+        host_gl_destroy_context: (_pid: number, _ctxId: number): void => {},
+        host_gl_create_surface: (
+          _pid: number, _surfaceId: number,
+          _attrsPtr: bigint, _attrsLen: bigint,
+        ): void => {},
+        host_gl_destroy_surface: (_pid: number, _surfaceId: number): void => {},
+        host_gl_make_current: (
+          _pid: number, _ctxId: number, _surfaceId: number,
+        ): void => {},
+        host_gl_submit: (
+          _pid: number, _offset: bigint, _length: bigint,
+        ): void => {},
+        host_gl_present: (_pid: number): void => {},
+        host_gl_query: (
+          _pid: number, _op: number,
+          _inPtr: bigint, _inLen: bigint,
+          _outPtr: bigint, _outLen: bigint,
+        ): number => 0,
       },
     };
   }

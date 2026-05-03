@@ -10,10 +10,11 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { join, dirname } from "node:path";
-import { existsSync, rmSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -95,6 +96,53 @@ test("simple: runs dirs program", async ({ page }) => {
   await page.selectOption("#program", "dirs");
   await page.click("#run");
   await waitForText(page, "#output", "Exited with code 0");
+});
+
+// Tag-import regression guard: setjmp.wasm imports env.__c_longjmp as a
+// WebAssembly.Tag. Verifies host/src/worker-main.ts buildImportObject
+// synthesizes Tag instances correctly in the browser host (PR #5 fix).
+// Mirrors host/test/setjmp.test.ts — compiles fresh at test time, no
+// static artifact dependency.
+function hasWasmCompiler(): boolean {
+  try {
+    execSync("wasm32posix-cc --version", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("simple: runs setjmp program (Tag-import regression)", async ({ page }) => {
+  test.skip(!hasWasmCompiler(), "wasm32posix-cc not on PATH");
+  const tmpDir = join(tmpdir(), "wasm-browser-setjmp");
+  mkdirSync(tmpDir, { recursive: true });
+  const setjmpSrc = join(tmpDir, "setjmp_test.c");
+  const setjmpOut = join(__dirname, "..", "..", "setjmp.wasm");
+  const SOURCE = `#include <setjmp.h>
+#include <stdio.h>
+int main(void) {
+    jmp_buf jb;
+    int v = setjmp(jb);
+    if (v == 0) longjmp(jb, 42);
+    printf("after=%d\\n", v);
+    return 0;
+}
+`;
+  writeFileSync(setjmpSrc, SOURCE);
+  execSync(`wasm32posix-cc "${setjmpSrc}" -o "${setjmpOut}"`, { stdio: "pipe" });
+  await page.goto("/");
+  await page.evaluate(() => {
+    const sel = document.getElementById("program") as HTMLSelectElement;
+    const opt = document.createElement("option");
+    opt.value = "setjmp";
+    opt.textContent = "setjmp";
+    sel.appendChild(opt);
+  });
+  await page.selectOption("#program", "setjmp");
+  await page.click("#run");
+  await waitForText(page, "#output", "Exited with code 0");
+  const output = await page.locator("#output").textContent();
+  expect(output).toContain("after=42");
 });
 
 // ─── Shell (batch mode) ─────────────────────────────────────────────

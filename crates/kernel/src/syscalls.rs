@@ -46,11 +46,12 @@ fn parse_ascii_usize(bytes: &[u8]) -> Option<usize> {
 /// Virtual character devices handled entirely in-kernel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VirtualDevice {
-    Null,     // /dev/null     host_handle = -1
-    Zero,     // /dev/zero     host_handle = -2
-    Urandom,  // /dev/urandom  host_handle = -3
-    Full,     // /dev/full     host_handle = -4
-    Fb0,      // /dev/fb0      host_handle = -5
+    Null,        // /dev/null              host_handle = -1
+    Zero,        // /dev/zero              host_handle = -2
+    Urandom,     // /dev/urandom           host_handle = -3
+    Full,        // /dev/full              host_handle = -4
+    Fb0,         // /dev/fb0               host_handle = -5
+    DriRender0,  // /dev/dri/renderD128    host_handle = -6
 }
 
 impl VirtualDevice {
@@ -62,6 +63,7 @@ impl VirtualDevice {
             VirtualDevice::Urandom => -3,
             VirtualDevice::Full => -4,
             VirtualDevice::Fb0 => -5,
+            VirtualDevice::DriRender0 => -6,
         }
     }
 
@@ -73,6 +75,7 @@ impl VirtualDevice {
             -3 => Some(VirtualDevice::Urandom),
             -4 => Some(VirtualDevice::Full),
             -5 => Some(VirtualDevice::Fb0),
+            -6 => Some(VirtualDevice::DriRender0),
             _ => None,
         }
     }
@@ -85,6 +88,7 @@ impl VirtualDevice {
             VirtualDevice::Urandom => 3,
             VirtualDevice::Full => 4,
             VirtualDevice::Fb0 => 5,
+            VirtualDevice::DriRender0 => 6,
         }
     }
 }
@@ -97,6 +101,7 @@ fn match_virtual_device(path: &[u8]) -> Option<VirtualDevice> {
         b"/dev/urandom" | b"/dev/random" => Some(VirtualDevice::Urandom),
         b"/dev/full" => Some(VirtualDevice::Full),
         b"/dev/fb0" => Some(VirtualDevice::Fb0),
+        b"/dev/dri/renderD128" => Some(VirtualDevice::DriRender0),
         _ => None,
     }
 }
@@ -202,6 +207,49 @@ fn proc_has_fb0_fd(proc: &Process) -> bool {
     false
 }
 
+/// Try to claim `/dev/dri/renderD128` for the calling process.
+///
+/// Mirrors `acquire_fb0_or_busy`: single-owner with re-open by the same
+/// pid allowed; any other pid sees `EBUSY`.
+fn acquire_dri_render0_or_busy(pid: u32) -> Result<(), Errno> {
+    use core::sync::atomic::Ordering;
+    let pid = pid as i32;
+    let owner = crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst);
+    if owner != -1 && owner != pid {
+        return Err(Errno::EBUSY);
+    }
+    let _ = crate::process_table::GL_DEVICE_OWNER
+        .compare_exchange(-1, pid, Ordering::SeqCst, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Release `/dev/dri/renderD128` ownership held by `pid`, if any.
+/// Idempotent — safe to call from `close`, `munmap`, or process exit
+/// regardless of whether the process actually owned the device.
+pub(crate) fn maybe_release_dri_render0(pid: u32) {
+    use core::sync::atomic::Ordering;
+    let _ = crate::process_table::GL_DEVICE_OWNER
+        .compare_exchange(pid as i32, -1, Ordering::SeqCst, Ordering::SeqCst);
+}
+
+/// True iff `proc` still has an open fd referencing `/dev/dri/renderD128`.
+fn proc_has_dri_render0_fd(proc: &Process) -> bool {
+    use crate::ofd::FileType;
+    for fd_i in 0..1024i32 {
+        if let Ok(entry) = proc.fd_table.get(fd_i) {
+            if let Some(ofd) = proc.ofd_table.get(entry.ofd_ref.0) {
+                if ofd.file_type == FileType::CharDevice
+                    && VirtualDevice::from_host_handle(ofd.host_handle)
+                        == Some(VirtualDevice::DriRender0)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Fixed framebuffer geometry. fbDOOM is happy with whatever the device
 /// reports; pinning a single mode keeps the implementation small.
 const FB_WIDTH: u32 = 640;
@@ -275,6 +323,184 @@ fn handle_fb_ioctl(request: u32, buf: &mut [u8]) -> Result<(), Errno> {
     }
 }
 
+/// Dispatch a `GLIO_*` ioctl on `/dev/dri/renderD128`.
+///
+/// `GL_DEVICE_OWNER` enforces single-process ownership of the device, so
+/// session state lives on `Process::gl_state` rather than per-OFD —
+/// re-opens by the same process share one logical session, mirroring how
+/// `Process::fb_binding` tracks a single fbdev mmap.
+///
+/// Cmdbuf binding (the `state.cmdbuf` field) is populated by the mmap
+/// path in Task A7. `GLIO_SUBMIT` therefore requires both `MAKE_CURRENT`
+/// (set by `state.current`) and a live cmdbuf binding; until A7 lands,
+/// SUBMIT returns `EINVAL` for any process that hasn't gone through the
+/// mmap path.
+///
+/// Note on `GLIO_QUERY` input/output buffers: `GlQueryInfo` carries
+/// `in_buf_ptr` / `out_buf_ptr` as wasm-process addresses for forward
+/// compatibility, but the centralized kernel cannot currently
+/// dereference cross-instance wasm pointers. v1 forwards an empty input
+/// slice to `host.gl_query` and writes the host's response into a
+/// kernel-side scratch buffer; the user-pointer copy-out becomes a
+/// follow-up task once the host bridge can read process memory directly
+/// (Phase B). The kernel still rejects `out_buf_len > MAX_QUERY_OUT_LEN`
+/// to bound the scratch allocation.
+fn handle_gl_ioctl(
+    proc: &mut Process,
+    host: &mut dyn HostIO,
+    request: u32,
+    buf: &mut [u8],
+) -> Result<(), Errno> {
+    use wasm_posix_shared::gl::*;
+
+    let pid = proc.pid as i32;
+
+    match request {
+        GLIO_INIT => {
+            // Client passes its compile-time OP_VERSION. Reject mismatches
+            // up-front so the divergence surfaces here, not as a silent
+            // cmdbuf decode error later.
+            if buf.len() < 4 {
+                return Err(Errno::EINVAL);
+            }
+            let client_op_version = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            if client_op_version != OP_VERSION {
+                return Err(Errno::ENOSYS);
+            }
+            let state = proc.gl_state.get_or_insert_with(crate::ofd::GlState::default);
+            state.initialized = true;
+            Ok(())
+        }
+        GLIO_TERMINATE => {
+            if let Some(mut state) = proc.gl_state.take() {
+                if state.cmdbuf.take().is_some() {
+                    host.gl_unbind(pid);
+                }
+                if let Some(c) = state.context_id.take() {
+                    host.gl_destroy_context(pid, c);
+                }
+                if let Some(s) = state.surface_id.take() {
+                    host.gl_destroy_surface(pid, s);
+                }
+            }
+            Ok(())
+        }
+        GLIO_CREATE_CONTEXT => {
+            let state = proc.gl_state.as_mut().ok_or(Errno::EINVAL)?;
+            if !state.initialized {
+                return Err(Errno::EINVAL);
+            }
+            if state.context_id.is_some() {
+                return Err(Errno::EINVAL);
+            }
+            if buf.len() < 16 {
+                return Err(Errno::EINVAL);
+            }
+            let ctx_id: u32 = 1; // single context per session in v1
+            host.gl_create_context(pid, ctx_id, &buf[..16]);
+            state.context_id = Some(ctx_id);
+            Ok(())
+        }
+        GLIO_DESTROY_CONTEXT => {
+            let state = proc.gl_state.as_mut().ok_or(Errno::EINVAL)?;
+            if let Some(c) = state.context_id.take() {
+                host.gl_destroy_context(pid, c);
+                state.current = false;
+            }
+            Ok(())
+        }
+        GLIO_CREATE_SURFACE => {
+            let state = proc.gl_state.as_mut().ok_or(Errno::EINVAL)?;
+            if !state.initialized {
+                return Err(Errno::EINVAL);
+            }
+            if state.surface_id.is_some() {
+                return Err(Errno::EINVAL);
+            }
+            if buf.len() < 32 {
+                return Err(Errno::EINVAL);
+            }
+            let surface_id: u32 = 1;
+            host.gl_create_surface(pid, surface_id, &buf[..32]);
+            state.surface_id = Some(surface_id);
+            Ok(())
+        }
+        GLIO_DESTROY_SURFACE => {
+            let state = proc.gl_state.as_mut().ok_or(Errno::EINVAL)?;
+            if let Some(s) = state.surface_id.take() {
+                host.gl_destroy_surface(pid, s);
+                state.current = false;
+            }
+            Ok(())
+        }
+        GLIO_MAKE_CURRENT => {
+            let state = proc.gl_state.as_mut().ok_or(Errno::EINVAL)?;
+            let (Some(c), Some(s)) = (state.context_id, state.surface_id) else {
+                return Err(Errno::EINVAL);
+            };
+            host.gl_make_current(pid, c, s);
+            state.current = true;
+            Ok(())
+        }
+        GLIO_SUBMIT => {
+            let state = proc.gl_state.as_mut().ok_or(Errno::EINVAL)?;
+            if !state.current {
+                return Err(Errno::EINVAL);
+            }
+            let cmdbuf = state.cmdbuf.as_mut().ok_or(Errno::EINVAL)?;
+            if buf.len() < 8 {
+                return Err(Errno::EINVAL);
+            }
+            let si: GlSubmitInfo = unsafe {
+                core::ptr::read_unaligned(buf.as_ptr() as *const GlSubmitInfo)
+            };
+            let end = (si.offset as usize)
+                .checked_add(si.length as usize)
+                .ok_or(Errno::EINVAL)?;
+            if end > cmdbuf.len {
+                return Err(Errno::EINVAL);
+            }
+            cmdbuf.submit_seq += 1;
+            host.gl_submit(pid, si.offset as usize, si.length as usize);
+            Ok(())
+        }
+        GLIO_PRESENT => {
+            let state = proc.gl_state.as_ref().ok_or(Errno::EINVAL)?;
+            if !state.current {
+                return Err(Errno::EINVAL);
+            }
+            host.gl_present(pid);
+            Ok(())
+        }
+        GLIO_QUERY => {
+            let state = proc.gl_state.as_ref().ok_or(Errno::EINVAL)?;
+            if !state.current {
+                return Err(Errno::EINVAL);
+            }
+            if buf.len() < 24 {
+                return Err(Errno::EINVAL);
+            }
+            let qi: GlQueryInfo = unsafe {
+                core::ptr::read_unaligned(buf.as_ptr() as *const GlQueryInfo)
+            };
+            // Bound the kernel-side scratch allocation so a malicious
+            // process can't pass `out_buf_len = 0xFFFFFFFE` and OOM the
+            // kernel worker.
+            if qi.out_buf_len > MAX_QUERY_OUT_LEN {
+                return Err(Errno::EINVAL);
+            }
+            let mut out_buf = alloc::vec![0u8; qi.out_buf_len as usize];
+            let n = host.gl_query(pid, qi.op, &[], &mut out_buf);
+            if n < 0 {
+                let raw = (-n) as u32;
+                return Err(Errno::from_u32(raw).unwrap_or(Errno::EIO));
+            }
+            Ok(())
+        }
+        _ => Err(Errno::ENOTTY),
+    }
+}
+
 /// Build a synthetic WasmStat for a virtual device.
 fn virtual_device_stat(dev: VirtualDevice, uid: u32, gid: u32) -> WasmStat {
     use wasm_posix_shared::mode::S_IFCHR;
@@ -325,6 +551,8 @@ pub fn sys_open(
     if let Some(dev) = match_virtual_device(&resolved) {
         if dev == VirtualDevice::Fb0 {
             acquire_fb0_or_busy(proc.pid)?;
+        } else if dev == VirtualDevice::DriRender0 {
+            acquire_dri_render0_or_busy(proc.pid)?;
         }
         let status_flags = oflags & !CREATION_FLAGS;
         let ofd_idx = proc.ofd_table.create(
@@ -640,6 +868,17 @@ pub fn sys_close(
         && !proc_has_fb0_fd(proc)
     {
         maybe_release_fb0(proc.pid);
+    }
+
+    // Same release rule for /dev/dri/renderD128. The cmdbuf mmap (if any)
+    // is recorded in `proc.gl_state.cmdbuf`; mmap outlives fd close, so
+    // only drop ownership when both fd and mmap are gone.
+    if file_type == FileType::CharDevice
+        && VirtualDevice::from_host_handle(host_handle) == Some(VirtualDevice::DriRender0)
+        && proc.gl_state.as_ref().map_or(true, |s| s.cmdbuf.is_none())
+        && !proc_has_dri_render0_fd(proc)
+    {
+        maybe_release_dri_render0(proc.pid);
     }
 
     Ok(())
@@ -960,7 +1199,9 @@ pub fn sys_read(
                         // expected to mmap. Return 0 (EOF-like) rather than
                         // making up pixel bytes, matching the existing
                         // "no-op for unsupported access" pattern.
-                        VirtualDevice::Null | VirtualDevice::Fb0 => 0,
+                        VirtualDevice::Null
+                        | VirtualDevice::Fb0
+                        | VirtualDevice::DriRender0 => 0,
                         VirtualDevice::Zero | VirtualDevice::Full => {
                             for b in buf.iter_mut() { *b = 0; }
                             buf.len()
@@ -3275,6 +3516,22 @@ pub fn sys_execve(proc: &mut Process, host: &mut dyn HostIO, path: &[u8]) -> Res
         proc.fb_binding = None;
         maybe_release_fb0(proc.pid);
     }
+    // /dev/dri/renderD128 cleanup: same shape — destroy host-side
+    // context/surface, drop the cmdbuf binding, release ownership. The
+    // new image must run GLIO_INIT itself to re-establish a session.
+    let pid_i32 = proc.pid as i32;
+    if let Some(mut state) = proc.gl_state.take() {
+        if state.cmdbuf.take().is_some() {
+            host.gl_unbind(pid_i32);
+        }
+        if let Some(c) = state.context_id.take() {
+            host.gl_destroy_context(pid_i32, c);
+        }
+        if let Some(s) = state.surface_id.take() {
+            host.gl_destroy_surface(pid_i32, s);
+        }
+    }
+    maybe_release_dri_render0(proc.pid);
     // Resolve relative paths against process CWD so the host sees absolute paths.
     // This is critical for posix_spawn with chdir file actions — the child's CWD
     // may differ from the initial data directory the host knows about.
@@ -4041,6 +4298,37 @@ pub fn sys_mmap(
             );
             return Ok(addr_out);
         }
+
+        // /dev/dri/renderD128: allocate the 1 MiB GL command buffer in
+        // process memory and notify the host. GLIO_INIT must have run
+        // first; the cmdbuf can only be mapped once per process.
+        if ofd.file_type == FileType::CharDevice
+            && VirtualDevice::from_host_handle(ofd.host_handle) == Some(VirtualDevice::DriRender0)
+        {
+            let state = proc.gl_state.as_ref().ok_or(Errno::EINVAL)?;
+            if !state.initialized {
+                return Err(Errno::EINVAL);
+            }
+            if state.cmdbuf.is_some() {
+                return Err(Errno::EINVAL);
+            }
+            if len != wasm_posix_shared::gl::CMDBUF_LEN {
+                return Err(Errno::EINVAL);
+            }
+            let alloc_flags = flags | MAP_ANONYMOUS;
+            let addr_out = proc.memory.mmap_anonymous(addr, len, prot, alloc_flags);
+            if addr_out == MAP_FAILED {
+                return Err(Errno::ENOMEM);
+            }
+            // Unwrap is safe: as_ref above already returned Ok.
+            proc.gl_state.as_mut().unwrap().cmdbuf = Some(crate::ofd::CmdbufBinding {
+                addr: addr_out,
+                len,
+                submit_seq: 0,
+            });
+            host.gl_bind(proc.pid as i32, addr_out, len);
+            return Ok(addr_out);
+        }
     }
 
     // Allocate the region. Both anonymous and file-backed use the same
@@ -4091,6 +4379,27 @@ pub fn sys_munmap(
         // Release ownership if the process also has no remaining Fb0 fds.
         if !proc_has_fb0_fd(proc) {
             maybe_release_fb0(proc.pid);
+        }
+    }
+
+    // /dev/dri/renderD128 cleanup: same shape as the Fb0 release above.
+    // The cmdbuf record lives on `gl_state.cmdbuf`; clearing it makes a
+    // subsequent GLIO_SUBMIT correctly error with EINVAL.
+    let gl_release = proc.gl_state.as_ref()
+        .and_then(|s| s.cmdbuf.as_ref())
+        .map(|c| {
+            let end = addr.saturating_add(len);
+            let c_end = c.addr.saturating_add(c.len);
+            addr <= c.addr && end >= c_end
+        })
+        .unwrap_or(false);
+    if gl_release {
+        if let Some(s) = proc.gl_state.as_mut() {
+            s.cmdbuf = None;
+        }
+        host.gl_unbind(proc.pid as i32);
+        if !proc_has_dri_render0_fd(proc) {
+            maybe_release_dri_render0(proc.pid);
         }
     }
 
@@ -5664,6 +5973,8 @@ pub fn sys_openat(
     if let Some(dev) = match_virtual_device(&resolved) {
         if dev == VirtualDevice::Fb0 {
             acquire_fb0_or_busy(proc.pid)?;
+        } else if dev == VirtualDevice::DriRender0 {
+            acquire_dri_render0_or_busy(proc.pid)?;
         }
         let status_flags = oflags & !CREATION_FLAGS;
         let ofd_idx = proc.ofd_table.create(
@@ -5992,7 +6303,13 @@ pub fn sys_tcsetattr(proc: &mut Process, fd: i32, _action: u32, buf: &[u8]) -> R
 /// ioctl -- device control.
 /// Supports generic ioctls (FIONREAD, FIONBIO, FIOCLEX, FIONCLEX) on any fd type,
 /// plus terminal ioctls (TIOCGWINSZ, TIOCSWINSZ) on CharDevice fds only.
-pub fn sys_ioctl(proc: &mut Process, fd: i32, request: u32, buf: &mut [u8]) -> Result<(), Errno> {
+pub fn sys_ioctl(
+    proc: &mut Process,
+    host: &mut dyn HostIO,
+    fd: i32,
+    request: u32,
+    buf: &mut [u8],
+) -> Result<(), Errno> {
     // FIOCLEX / FIONCLEX operate on the fd entry directly, not the OFD.
     match request {
         0x5451 => { // FIOCLEX — set FD_CLOEXEC
@@ -6164,6 +6481,17 @@ pub fn sys_ioctl(proc: &mut Process, fd: i32, request: u32, buf: &mut [u8]) -> R
             && VirtualDevice::from_host_handle(ofd.host_handle) == Some(VirtualDevice::Fb0)
         {
             return handle_fb_ioctl(request, buf);
+        }
+    }
+
+    // --- /dev/dri/renderD128 ioctls — GLES render node ---
+    {
+        let ofd = proc.ofd_table.get(ofd_idx).ok_or(Errno::EBADF)?;
+        if ofd.file_type == FileType::CharDevice
+            && VirtualDevice::from_host_handle(ofd.host_handle)
+                == Some(VirtualDevice::DriRender0)
+        {
+            return handle_gl_ioctl(proc, host, request, buf);
         }
     }
 
@@ -8617,6 +8945,16 @@ mod tests {
                             _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
         fn unbind_framebuffer(&mut self, _pid: i32) {}
         fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+        fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+        fn gl_unbind(&mut self, _pid: i32) {}
+        fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+        fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+        fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+        fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+        fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+        fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+        fn gl_present(&mut self, _pid: i32) {}
+        fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
     }
 
     #[test]
@@ -10684,8 +11022,9 @@ mod tests {
     #[test]
     fn test_ioctl_tiocgwinsz() {
         let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
         let mut buf = [0u8; 8];
-        let result = sys_ioctl(&mut proc, 0, 0x5413, &mut buf); // TIOCGWINSZ
+        let result = sys_ioctl(&mut proc, &mut host, 0, 0x5413, &mut buf); // TIOCGWINSZ
         assert!(result.is_ok());
         let ws_row = u16::from_le_bytes([buf[0], buf[1]]);
         let ws_col = u16::from_le_bytes([buf[2], buf[3]]);
@@ -10696,14 +11035,15 @@ mod tests {
     #[test]
     fn test_ioctl_tiocswinsz() {
         let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
         let mut buf = [0u8; 8];
         buf[0..2].copy_from_slice(&120u16.to_le_bytes()); // rows
         buf[2..4].copy_from_slice(&200u16.to_le_bytes()); // cols
-        let result = sys_ioctl(&mut proc, 0, 0x5414, &mut buf); // TIOCSWINSZ
+        let result = sys_ioctl(&mut proc, &mut host, 0, 0x5414, &mut buf); // TIOCSWINSZ
         assert!(result.is_ok());
         // Read back
         let mut buf2 = [0u8; 8];
-        sys_ioctl(&mut proc, 0, 0x5413, &mut buf2).unwrap(); // TIOCGWINSZ
+        sys_ioctl(&mut proc, &mut host, 0, 0x5413, &mut buf2).unwrap(); // TIOCGWINSZ
         let ws_row = u16::from_le_bytes([buf2[0], buf2[1]]);
         let ws_col = u16::from_le_bytes([buf2[2], buf2[3]]);
         assert_eq!(ws_row, 120);
@@ -10713,23 +11053,25 @@ mod tests {
     #[test]
     fn test_ioctl_unsupported_returns_enotty() {
         let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
         let mut buf = [0u8; 8];
-        let result = sys_ioctl(&mut proc, 0, 0x9999, &mut buf);
+        let result = sys_ioctl(&mut proc, &mut host, 0, 0x9999, &mut buf);
         assert_eq!(result, Err(Errno::ENOTTY));
     }
 
     #[test]
     fn test_ioctl_fionbio_set_nonblock() {
         let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
         // Set O_NONBLOCK via FIONBIO on stdout (fd 1)
         let mut buf = 1i32.to_le_bytes();
-        let result = sys_ioctl(&mut proc, 1, 0x5421, &mut buf);
+        let result = sys_ioctl(&mut proc, &mut host, 1, 0x5421, &mut buf);
         assert!(result.is_ok());
         let ofd = proc.ofd_table.get(proc.fd_table.get(1).unwrap().ofd_ref.0).unwrap();
         assert_ne!(ofd.status_flags & wasm_posix_shared::flags::O_NONBLOCK, 0);
         // Clear it
         let mut buf = 0i32.to_le_bytes();
-        sys_ioctl(&mut proc, 1, 0x5421, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, 1, 0x5421, &mut buf).unwrap();
         let ofd = proc.ofd_table.get(proc.fd_table.get(1).unwrap().ofd_ref.0).unwrap();
         assert_eq!(ofd.status_flags & wasm_posix_shared::flags::O_NONBLOCK, 0);
     }
@@ -10737,12 +11079,13 @@ mod tests {
     #[test]
     fn test_ioctl_fioclex_fionclex() {
         let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
         let mut buf = [0u8; 4];
         // Set FD_CLOEXEC via FIOCLEX on fd 0
-        sys_ioctl(&mut proc, 0, 0x5451, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, 0, 0x5451, &mut buf).unwrap();
         assert_ne!(proc.fd_table.get(0).unwrap().fd_flags & wasm_posix_shared::fd_flags::FD_CLOEXEC, 0);
         // Clear via FIONCLEX
-        sys_ioctl(&mut proc, 0, 0x5450, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, 0, 0x5450, &mut buf).unwrap();
         assert_eq!(proc.fd_table.get(0).unwrap().fd_flags & wasm_posix_shared::fd_flags::FD_CLOEXEC, 0);
     }
 
@@ -10755,7 +11098,7 @@ mod tests {
         sys_write(&mut proc, &mut host, write_fd, b"hello").unwrap();
         // FIONREAD should return 5
         let mut buf = [0u8; 4];
-        sys_ioctl(&mut proc, read_fd, 0x541B, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, read_fd, 0x541B, &mut buf).unwrap();
         let avail = i32::from_le_bytes(buf);
         assert_eq!(avail, 5);
     }
@@ -10763,9 +11106,10 @@ mod tests {
     #[test]
     fn test_ioctl_fionread_regular() {
         let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
         // FIONREAD on a CharDevice returns 0
         let mut buf = [0u8; 4];
-        sys_ioctl(&mut proc, 0, 0x541B, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, 0, 0x541B, &mut buf).unwrap();
         let avail = i32::from_le_bytes(buf);
         assert_eq!(avail, 0);
     }
@@ -10782,7 +11126,7 @@ mod tests {
 
         // No OOB pending: SIOCATMARK returns 0
         let mut iobuf = [0u8; 4];
-        sys_ioctl(&mut proc, fd1, 0x8905, &mut iobuf).unwrap();
+        sys_ioctl(&mut proc, &mut host, fd1, 0x8905, &mut iobuf).unwrap();
         assert_eq!(i32::from_le_bytes(iobuf), 0);
 
         // Send OOB byte from fd0
@@ -10791,7 +11135,7 @@ mod tests {
 
         // SIOCATMARK on fd1 returns 1
         let mut iobuf = [0u8; 4];
-        sys_ioctl(&mut proc, fd1, 0x8905, &mut iobuf).unwrap();
+        sys_ioctl(&mut proc, &mut host, fd1, 0x8905, &mut iobuf).unwrap();
         assert_eq!(i32::from_le_bytes(iobuf), 1);
 
         // Recv OOB byte from fd1
@@ -10802,7 +11146,7 @@ mod tests {
 
         // After reading OOB, SIOCATMARK returns 0
         let mut iobuf = [0u8; 4];
-        sys_ioctl(&mut proc, fd1, 0x8905, &mut iobuf).unwrap();
+        sys_ioctl(&mut proc, &mut host, fd1, 0x8905, &mut iobuf).unwrap();
         assert_eq!(i32::from_le_bytes(iobuf), 0);
     }
 
@@ -12134,6 +12478,42 @@ mod tests {
         len: usize,
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlBindCall {
+        pid: i32,
+        addr: usize,
+        len: usize,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlAttrsCall {
+        pid: i32,
+        id: u32,
+        attrs: Vec<u8>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlMakeCurrentCall {
+        pid: i32,
+        ctx_id: u32,
+        surface_id: u32,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlSubmitCall {
+        pid: i32,
+        offset: usize,
+        length: usize,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct GlQueryCall {
+        pid: i32,
+        op: u32,
+        input: Vec<u8>,
+        out_len: usize,
+    }
+
     struct TrackingHostIO {
         next_handle: i64,
         last_open_path: Vec<u8>,
@@ -12155,6 +12535,16 @@ mod tests {
         bind_framebuffer_calls: Vec<BindFbCall>,
         unbind_framebuffer_calls: Vec<i32>,
         fb_write_calls: Vec<FbWriteCall>,
+        gl_bind_calls: Vec<GlBindCall>,
+        gl_unbind_calls: Vec<i32>,
+        gl_create_context_calls: Vec<GlAttrsCall>,
+        gl_destroy_context_calls: Vec<(i32, u32)>,
+        gl_create_surface_calls: Vec<GlAttrsCall>,
+        gl_destroy_surface_calls: Vec<(i32, u32)>,
+        gl_make_current_calls: Vec<GlMakeCurrentCall>,
+        gl_submit_calls: Vec<GlSubmitCall>,
+        gl_present_calls: Vec<i32>,
+        gl_query_calls: Vec<GlQueryCall>,
     }
 
     impl TrackingHostIO {
@@ -12180,6 +12570,16 @@ mod tests {
                 bind_framebuffer_calls: Vec::new(),
                 unbind_framebuffer_calls: Vec::new(),
                 fb_write_calls: Vec::new(),
+                gl_bind_calls: Vec::new(),
+                gl_unbind_calls: Vec::new(),
+                gl_create_context_calls: Vec::new(),
+                gl_destroy_context_calls: Vec::new(),
+                gl_create_surface_calls: Vec::new(),
+                gl_destroy_surface_calls: Vec::new(),
+                gl_make_current_calls: Vec::new(),
+                gl_submit_calls: Vec::new(),
+                gl_present_calls: Vec::new(),
+                gl_query_calls: Vec::new(),
             }
         }
     }
@@ -12349,6 +12749,45 @@ mod tests {
                 offset,
                 len: bytes.len(),
             });
+        }
+        fn gl_bind(&mut self, pid: i32, addr: usize, len: usize) {
+            self.gl_bind_calls.push(GlBindCall { pid, addr, len });
+        }
+        fn gl_unbind(&mut self, pid: i32) {
+            self.gl_unbind_calls.push(pid);
+        }
+        fn gl_create_context(&mut self, pid: i32, ctx_id: u32, attrs: &[u8]) {
+            self.gl_create_context_calls.push(GlAttrsCall { pid, id: ctx_id, attrs: attrs.to_vec() });
+        }
+        fn gl_destroy_context(&mut self, pid: i32, ctx_id: u32) {
+            self.gl_destroy_context_calls.push((pid, ctx_id));
+        }
+        fn gl_create_surface(&mut self, pid: i32, surface_id: u32, attrs: &[u8]) {
+            self.gl_create_surface_calls.push(GlAttrsCall { pid, id: surface_id, attrs: attrs.to_vec() });
+        }
+        fn gl_destroy_surface(&mut self, pid: i32, surface_id: u32) {
+            self.gl_destroy_surface_calls.push((pid, surface_id));
+        }
+        fn gl_make_current(&mut self, pid: i32, ctx_id: u32, surface_id: u32) {
+            self.gl_make_current_calls.push(GlMakeCurrentCall { pid, ctx_id, surface_id });
+        }
+        fn gl_submit(&mut self, pid: i32, offset: usize, length: usize) {
+            self.gl_submit_calls.push(GlSubmitCall { pid, offset, length });
+        }
+        fn gl_present(&mut self, pid: i32) {
+            self.gl_present_calls.push(pid);
+        }
+        fn gl_query(&mut self, pid: i32, op: u32, input: &[u8], out: &mut [u8]) -> i32 {
+            self.gl_query_calls.push(GlQueryCall {
+                pid, op,
+                input: input.to_vec(),
+                out_len: out.len(),
+            });
+            // Echo a deterministic 4-byte response so tests can assert that
+            // the kernel receives what the host wrote.
+            let n = out.len().min(4);
+            out[..n].copy_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF][..n]);
+            n as i32
         }
     }
 
@@ -12842,6 +13281,16 @@ mod tests {
             fn bind_framebuffer(&mut self, _pid: i32, _addr: usize, _len: usize, _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
             fn unbind_framebuffer(&mut self, _pid: i32) {}
             fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+            fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+            fn gl_unbind(&mut self, _pid: i32) {}
+            fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+            fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+            fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+            fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+            fn gl_present(&mut self, _pid: i32) {}
+            fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
         }
 
         let mut proc = Process::new(1);
@@ -13266,6 +13715,7 @@ mod tests {
         assert_eq!(match_virtual_device(b"/dev/urandom"), Some(VirtualDevice::Urandom));
         assert_eq!(match_virtual_device(b"/dev/random"), Some(VirtualDevice::Urandom));
         assert_eq!(match_virtual_device(b"/dev/full"), Some(VirtualDevice::Full));
+        assert_eq!(match_virtual_device(b"/dev/dri/renderD128"), Some(VirtualDevice::DriRender0));
         assert_eq!(match_virtual_device(b"/dev/tty"), None);
         assert_eq!(match_virtual_device(b"/tmp/foo"), None);
     }
@@ -13285,11 +13735,18 @@ mod tests {
 
     #[test]
     fn test_virtual_device_roundtrip() {
-        for dev in [VirtualDevice::Null, VirtualDevice::Zero, VirtualDevice::Urandom, VirtualDevice::Full, VirtualDevice::Fb0] {
+        for dev in [
+            VirtualDevice::Null,
+            VirtualDevice::Zero,
+            VirtualDevice::Urandom,
+            VirtualDevice::Full,
+            VirtualDevice::Fb0,
+            VirtualDevice::DriRender0,
+        ] {
             assert_eq!(VirtualDevice::from_host_handle(dev.host_handle()), Some(dev));
         }
         assert_eq!(VirtualDevice::from_host_handle(0), None);
-        assert_eq!(VirtualDevice::from_host_handle(-6), None);
+        assert_eq!(VirtualDevice::from_host_handle(-7), None);
     }
 
     // ===== Loopback socket tests =====
@@ -14373,19 +14830,20 @@ mod tests {
     #[test]
     fn test_tiocgpgrp_tiocspgrp() {
         let mut proc = Process::new(1);
+        let mut host = MockHostIO::new();
         let mut buf = [0u8; 4];
 
         // TIOCGPGRP on stdin (fd 0, which is a CharDevice)
-        sys_ioctl(&mut proc, 0, 0x540F, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, 0, 0x540F, &mut buf).unwrap();
         let pgid = i32::from_le_bytes(buf);
         assert_eq!(pgid, 1); // default foreground_pgid
 
         // TIOCSPGRP — set to 42
         buf.copy_from_slice(&42i32.to_le_bytes());
-        sys_ioctl(&mut proc, 0, 0x5410, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, 0, 0x5410, &mut buf).unwrap();
 
         // Read back
-        sys_ioctl(&mut proc, 0, 0x540F, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, 0, 0x540F, &mut buf).unwrap();
         let pgid = i32::from_le_bytes(buf);
         assert_eq!(pgid, 42);
     }
@@ -14398,7 +14856,7 @@ mod tests {
 
         // Open a regular file
         let fd = sys_open(&mut proc, &mut host, b"/tmp/test", O_RDWR | O_CREAT, 0o644).unwrap();
-        let result = sys_ioctl(&mut proc, fd, 0x540F, &mut buf);
+        let result = sys_ioctl(&mut proc, &mut host, fd, 0x540F, &mut buf);
         assert_eq!(result, Err(Errno::ENOTTY));
     }
 
@@ -14488,6 +14946,16 @@ mod tests {
             fn bind_framebuffer(&mut self, _pid: i32, _addr: usize, _len: usize, _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
             fn unbind_framebuffer(&mut self, _pid: i32) {}
             fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+            fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+            fn gl_unbind(&mut self, _pid: i32) {}
+            fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+            fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+            fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+            fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+            fn gl_present(&mut self, _pid: i32) {}
+            fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
         }
 
         let mut proc = Process::new(1);
@@ -14574,6 +15042,16 @@ mod tests {
             fn bind_framebuffer(&mut self, _pid: i32, _addr: usize, _len: usize, _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
             fn unbind_framebuffer(&mut self, _pid: i32) {}
             fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+            fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+            fn gl_unbind(&mut self, _pid: i32) {}
+            fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+            fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+            fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+            fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+            fn gl_present(&mut self, _pid: i32) {}
+            fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
         }
 
         let mut proc = Process::new(1);
@@ -14669,6 +15147,16 @@ mod tests {
             fn bind_framebuffer(&mut self, _pid: i32, _addr: usize, _len: usize, _w: u32, _h: u32, _stride: u32, _fmt: u32) {}
             fn unbind_framebuffer(&mut self, _pid: i32) {}
             fn fb_write(&mut self, _pid: i32, _offset: usize, _bytes: &[u8]) {}
+            fn gl_bind(&mut self, _pid: i32, _addr: usize, _len: usize) {}
+            fn gl_unbind(&mut self, _pid: i32) {}
+            fn gl_create_context(&mut self, _pid: i32, _ctx_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_context(&mut self, _pid: i32, _ctx_id: u32) {}
+            fn gl_create_surface(&mut self, _pid: i32, _surface_id: u32, _attrs: &[u8]) {}
+            fn gl_destroy_surface(&mut self, _pid: i32, _surface_id: u32) {}
+            fn gl_make_current(&mut self, _pid: i32, _ctx_id: u32, _surface_id: u32) {}
+            fn gl_submit(&mut self, _pid: i32, _offset: usize, _length: usize) {}
+            fn gl_present(&mut self, _pid: i32) {}
+            fn gl_query(&mut self, _pid: i32, _op: u32, _input: &[u8], _out: &mut [u8]) -> i32 { 0 }
         }
 
         let mut proc = Process::new(1);
@@ -15323,6 +15811,35 @@ mod tests {
         assert_eq!(st.st_ino, VirtualDevice::Fb0.ino());
     }
 
+    #[test]
+    fn match_virtual_device_recognizes_dri_renderd128() {
+        assert_eq!(match_virtual_device(b"/dev/dri/renderD128"),
+                   Some(VirtualDevice::DriRender0));
+        // No card0 (KMS) and no other render nodes in v1.
+        assert_eq!(match_virtual_device(b"/dev/dri/card0"),       None);
+        assert_eq!(match_virtual_device(b"/dev/dri/renderD129"),  None);
+    }
+
+    #[test]
+    fn dri_render0_has_unique_host_handle_sentinel() {
+        let h = VirtualDevice::DriRender0.host_handle();
+        assert_eq!(VirtualDevice::from_host_handle(h), Some(VirtualDevice::DriRender0));
+        // Distinct from every existing virtual device.
+        assert_ne!(h, VirtualDevice::Null.host_handle());
+        assert_ne!(h, VirtualDevice::Zero.host_handle());
+        assert_ne!(h, VirtualDevice::Urandom.host_handle());
+        assert_ne!(h, VirtualDevice::Full.host_handle());
+        assert_ne!(h, VirtualDevice::Fb0.host_handle());
+    }
+
+    #[test]
+    fn dri_render0_stat_is_chr() {
+        let st = virtual_device_stat(VirtualDevice::DriRender0, 0, 0);
+        assert_eq!(st.st_mode & wasm_posix_shared::mode::S_IFMT,
+                   wasm_posix_shared::mode::S_IFCHR);
+        assert_eq!(st.st_ino, VirtualDevice::DriRender0.ino());
+    }
+
     /// Mutex serializing tests that touch the global FB0_OWNER atomic.
     static FB0_OWNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -15337,7 +15854,7 @@ mod tests {
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/fb0", O_RDWR, 0).unwrap();
         let mut buf = [0u8; 160];
-        sys_ioctl(&mut proc, fd, FBIOGET_VSCREENINFO, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, fd, FBIOGET_VSCREENINFO, &mut buf).unwrap();
         let v: FbVarScreenInfo = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const _) };
         assert_eq!(v.xres, 640);
         assert_eq!(v.yres, 400);
@@ -15361,7 +15878,7 @@ mod tests {
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/fb0", O_RDWR, 0).unwrap();
         let mut buf = [0u8; 80];
-        sys_ioctl(&mut proc, fd, FBIOGET_FSCREENINFO, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, fd, FBIOGET_FSCREENINFO, &mut buf).unwrap();
         let f: FbFixScreenInfo = unsafe { core::ptr::read_unaligned(buf.as_ptr() as *const _) };
         assert_eq!(&f.id[..6], b"wasmfb");
         assert_eq!(f.smem_len, 640 * 400 * 4);
@@ -15383,7 +15900,7 @@ mod tests {
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/fb0", O_RDWR, 0).unwrap();
         let mut buf = [0u8; 160];
-        sys_ioctl(&mut proc, fd, FBIOPAN_DISPLAY, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, fd, FBIOPAN_DISPLAY, &mut buf).unwrap();
         sys_close(&mut proc, &mut host, fd).unwrap();
     }
 
@@ -15401,14 +15918,14 @@ mod tests {
         v.xres = 320; v.yres = 200; v.bits_per_pixel = 32;
         let mut buf = [0u8; 160];
         unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut _, v); }
-        let err = sys_ioctl(&mut proc, fd, FBIOPUT_VSCREENINFO, &mut buf).unwrap_err();
+        let err = sys_ioctl(&mut proc, &mut host, fd, FBIOPUT_VSCREENINFO, &mut buf).unwrap_err();
         assert_eq!(err, Errno::EINVAL);
 
         // Matching geometry succeeds.
         let mut v = FbVarScreenInfo::default();
         v.xres = 640; v.yres = 400; v.bits_per_pixel = 32;
         unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut _, v); }
-        sys_ioctl(&mut proc, fd, FBIOPUT_VSCREENINFO, &mut buf).unwrap();
+        sys_ioctl(&mut proc, &mut host, fd, FBIOPUT_VSCREENINFO, &mut buf).unwrap();
 
         sys_close(&mut proc, &mut host, fd).unwrap();
     }
@@ -15423,7 +15940,7 @@ mod tests {
         let mut host = MockHostIO::new();
         let fd = sys_open(&mut proc, &mut host, b"/dev/fb0", O_RDWR, 0).unwrap();
         let mut buf = [0u8; 160];  // big enough that ENOTTY is the only failure mode
-        let err = sys_ioctl(&mut proc, fd, 0x46FF, &mut buf).unwrap_err();
+        let err = sys_ioctl(&mut proc, &mut host, fd, 0x46FF, &mut buf).unwrap_err();
         assert_eq!(err, Errno::ENOTTY);
         sys_close(&mut proc, &mut host, fd).unwrap();
     }
@@ -15625,5 +16142,603 @@ mod tests {
         let fd2 = sys_open(&mut proc2, &mut host, b"/dev/fb0", O_RDWR, 0).unwrap();
         sys_close(&mut proc2, &mut host, fd2).unwrap();
         assert_eq!(crate::process_table::FB0_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    /// Mutex serializing tests that touch the global GL_DEVICE_OWNER atomic.
+    static GL_DEVICE_OWNER_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn open_dri_renderd128_is_single_owner_across_pids() {
+        use crate::process_table::GL_DEVICE_OWNER;
+        use core::sync::atomic::Ordering;
+        let _g = GL_DEVICE_OWNER_LOCK.lock().unwrap();
+        GL_DEVICE_OWNER.store(-1, Ordering::SeqCst);
+
+        let mut pa = Process::new(11);
+        let mut pb = Process::new(12);
+        let mut host_a = MockHostIO::new();
+        let mut host_b = MockHostIO::new();
+
+        // pid=11 opens — succeeds, owns the device.
+        let fd_a = sys_open(&mut pa, &mut host_a, b"/dev/dri/renderD128", O_RDWR, 0).unwrap();
+        assert_eq!(GL_DEVICE_OWNER.load(Ordering::SeqCst), 11);
+
+        // pid=12 attempts — EBUSY.
+        let err = sys_open(&mut pb, &mut host_b, b"/dev/dri/renderD128", O_RDWR, 0).unwrap_err();
+        assert_eq!(err, Errno::EBUSY);
+
+        // Same pid (11) re-opens — allowed; returns a distinct fd.
+        let fd_a2 = sys_open(&mut pa, &mut host_a, b"/dev/dri/renderD128", O_RDWR, 0).unwrap();
+        assert_ne!(fd_a, fd_a2);
+
+        // Closing both fds in the owning process releases ownership.
+        sys_close(&mut pa, &mut host_a, fd_a).unwrap();
+        assert_eq!(GL_DEVICE_OWNER.load(Ordering::SeqCst), 11);
+        sys_close(&mut pa, &mut host_a, fd_a2).unwrap();
+        assert_eq!(GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+
+        // Now pid=12 can open.
+        let fd_b = sys_open(&mut pb, &mut host_b, b"/dev/dri/renderD128", O_RDWR, 0).unwrap();
+        sys_close(&mut pb, &mut host_b, fd_b).unwrap();
+        assert_eq!(GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    // ----- Task A4: HostIO GL trait methods -----
+    //
+    // These tests exercise the trait surface in isolation (no syscall plumbing
+    // yet — that arrives in A5/A6). They verify TrackingHostIO records each
+    // call and forwards the right arguments.
+
+    #[test]
+    fn gl_bind_records_pid_addr_len() {
+        let mut host = TrackingHostIO::new();
+        host.gl_bind(7, 0x10_0000, wasm_posix_shared::gl::CMDBUF_LEN as usize);
+        assert_eq!(host.gl_bind_calls.len(), 1);
+        assert_eq!(host.gl_bind_calls[0],
+                   GlBindCall { pid: 7, addr: 0x10_0000,
+                                len: wasm_posix_shared::gl::CMDBUF_LEN as usize });
+    }
+
+    #[test]
+    fn gl_unbind_records_pid_and_is_idempotent() {
+        let mut host = TrackingHostIO::new();
+        host.gl_unbind(11);
+        host.gl_unbind(11);
+        assert_eq!(host.gl_unbind_calls, alloc::vec![11, 11]);
+    }
+
+    #[test]
+    fn gl_create_context_forwards_attrs_payload() {
+        let mut host = TrackingHostIO::new();
+        let attrs = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        host.gl_create_context(3, 42, &attrs);
+        assert_eq!(host.gl_create_context_calls.len(), 1);
+        let call = &host.gl_create_context_calls[0];
+        assert_eq!(call.pid, 3);
+        assert_eq!(call.id, 42);
+        assert_eq!(call.attrs, attrs);
+    }
+
+    #[test]
+    fn gl_destroy_context_records_pair() {
+        let mut host = TrackingHostIO::new();
+        host.gl_destroy_context(3, 42);
+        assert_eq!(host.gl_destroy_context_calls, alloc::vec![(3, 42)]);
+    }
+
+    #[test]
+    fn gl_create_surface_forwards_attrs_payload() {
+        let mut host = TrackingHostIO::new();
+        let attrs = [0u8; 32];
+        host.gl_create_surface(5, 1, &attrs);
+        assert_eq!(host.gl_create_surface_calls.len(), 1);
+        let call = &host.gl_create_surface_calls[0];
+        assert_eq!(call.pid, 5);
+        assert_eq!(call.id, 1);
+        assert_eq!(call.attrs.len(), 32);
+    }
+
+    #[test]
+    fn gl_destroy_surface_records_pair() {
+        let mut host = TrackingHostIO::new();
+        host.gl_destroy_surface(5, 1);
+        assert_eq!(host.gl_destroy_surface_calls, alloc::vec![(5, 1)]);
+    }
+
+    #[test]
+    fn gl_make_current_records_triple() {
+        let mut host = TrackingHostIO::new();
+        host.gl_make_current(3, 42, 1);
+        assert_eq!(host.gl_make_current_calls.len(), 1);
+        assert_eq!(host.gl_make_current_calls[0],
+                   GlMakeCurrentCall { pid: 3, ctx_id: 42, surface_id: 1 });
+    }
+
+    #[test]
+    fn gl_submit_records_offset_length() {
+        let mut host = TrackingHostIO::new();
+        host.gl_submit(3, 0, 256);
+        host.gl_submit(3, 256, 128);
+        assert_eq!(host.gl_submit_calls.len(), 2);
+        assert_eq!(host.gl_submit_calls[1],
+                   GlSubmitCall { pid: 3, offset: 256, length: 128 });
+    }
+
+    #[test]
+    fn gl_present_records_pid() {
+        let mut host = TrackingHostIO::new();
+        host.gl_present(3);
+        assert_eq!(host.gl_present_calls, alloc::vec![3]);
+    }
+
+    #[test]
+    fn gl_query_records_io_and_returns_byte_count() {
+        let mut host = TrackingHostIO::new();
+        let input = [0xAAu8, 0xBB, 0xCC, 0xDD];
+        let mut out = [0u8; 8];
+        // Op tag is opaque to the kernel — the host owns the QOP_* table.
+        let n = host.gl_query(3, 1, &input, &mut out);
+        // TrackingHostIO echoes 4 deterministic bytes regardless of op.
+        assert_eq!(n, 4);
+        assert_eq!(&out[..4], &[0xDE, 0xAD, 0xBE, 0xEF]);
+        assert_eq!(host.gl_query_calls.len(), 1);
+        let call = &host.gl_query_calls[0];
+        assert_eq!(call.pid, 3);
+        assert_eq!(call.op, 1);
+        assert_eq!(call.input, input);
+        assert_eq!(call.out_len, 8);
+    }
+
+    // ----- Task A6: GLIO_* ioctl handlers -----
+
+    fn open_gl(p: &mut Process, h: &mut dyn HostIO) -> i32 {
+        sys_open(p, h, b"/dev/dri/renderD128", O_RDWR, 0).unwrap()
+    }
+
+    /// Reset the GL_DEVICE_OWNER atomic and return the lock guard. All
+    /// tests that touch the device must hold this lock — the atomic is
+    /// process-global.
+    fn gl_owner_reset() -> std::sync::MutexGuard<'static, ()> {
+        use core::sync::atomic::Ordering;
+        let g = GL_DEVICE_OWNER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::process_table::GL_DEVICE_OWNER.store(-1, Ordering::SeqCst);
+        g
+    }
+
+    fn glio_init_ok(p: &mut Process, h: &mut dyn HostIO, fd: i32) {
+        use wasm_posix_shared::gl::OP_VERSION;
+        let mut buf = OP_VERSION.to_le_bytes();
+        sys_ioctl(p, h, fd, wasm_posix_shared::gl::GLIO_INIT, &mut buf).unwrap();
+    }
+
+    /// Helper: GLIO_INIT → CREATE_CONTEXT → CREATE_SURFACE → MAKE_CURRENT.
+    fn init_ctx_surface_and_make_current(p: &mut Process, h: &mut dyn HostIO, fd: i32) {
+        use wasm_posix_shared::gl::*;
+        glio_init_ok(p, h, fd);
+        let attrs = GlContextAttrs { client_version: 2, reserved: [0; 3] };
+        let mut cbuf = [0u8; 16];
+        unsafe { core::ptr::write_unaligned(cbuf.as_mut_ptr() as *mut GlContextAttrs, attrs); }
+        sys_ioctl(p, h, fd, GLIO_CREATE_CONTEXT, &mut cbuf).unwrap();
+        let sattr = GlSurfaceAttrs {
+            kind: WPK_SURFACE_DEFAULT,
+            width: 0, height: 0, config_id: 1, reserved: [0; 4],
+        };
+        let mut sbuf = [0u8; 32];
+        unsafe { core::ptr::write_unaligned(sbuf.as_mut_ptr() as *mut GlSurfaceAttrs, sattr); }
+        sys_ioctl(p, h, fd, GLIO_CREATE_SURFACE, &mut sbuf).unwrap();
+        sys_ioctl(p, h, fd, GLIO_MAKE_CURRENT, &mut [][..]).unwrap();
+    }
+
+    #[test]
+    fn glio_init_marks_initialized() {
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let s = p.gl_state.as_ref().unwrap();
+        assert!(s.initialized);
+    }
+
+    #[test]
+    fn glio_init_rejects_op_version_mismatch() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        let mut buf = (OP_VERSION + 1).to_le_bytes();
+        let err = sys_ioctl(&mut p, &mut h, fd, GLIO_INIT, &mut buf).unwrap_err();
+        assert_eq!(err, Errno::ENOSYS);
+        assert!(p.gl_state.is_none());
+    }
+
+    #[test]
+    fn glio_create_context_calls_host_with_attrs() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let attrs = GlContextAttrs { client_version: 2, reserved: [0; 3] };
+        let mut buf = [0u8; 16];
+        unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut GlContextAttrs, attrs); }
+        sys_ioctl(&mut p, &mut h, fd, GLIO_CREATE_CONTEXT, &mut buf).unwrap();
+        assert_eq!(h.gl_create_context_calls.len(), 1);
+        let call = &h.gl_create_context_calls[0];
+        assert_eq!(call.pid, p.pid as i32);
+        assert_eq!(call.id, 1);
+        assert_eq!(call.attrs.len(), 16);
+        assert_eq!(p.gl_state.as_ref().unwrap().context_id, Some(1));
+    }
+
+    #[test]
+    fn glio_create_context_before_init_is_einval() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        let mut buf = [0u8; 16];
+        let err = sys_ioctl(&mut p, &mut h, fd, GLIO_CREATE_CONTEXT, &mut buf).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+    }
+
+    #[test]
+    fn glio_make_current_requires_ctx_and_surface() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        // No context yet → EINVAL.
+        let err = sys_ioctl(&mut p, &mut h, fd, GLIO_MAKE_CURRENT, &mut [][..]).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+    }
+
+    #[test]
+    fn glio_make_current_succeeds_after_ctx_and_surface() {
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        assert_eq!(h.gl_make_current_calls.len(), 1);
+        let call = &h.gl_make_current_calls[0];
+        assert_eq!(call.pid, p.pid as i32);
+        assert_eq!(call.ctx_id, 1);
+        assert_eq!(call.surface_id, 1);
+        assert!(p.gl_state.as_ref().unwrap().current);
+    }
+
+    #[test]
+    fn glio_query_rejects_oversize_out_buf() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        let qi = GlQueryInfo {
+            op: 1, // opaque to the kernel
+            in_buf_ptr: 0, in_buf_len: 0,
+            out_buf_ptr: 0, out_buf_len: MAX_QUERY_OUT_LEN + 1,
+            reserved: 0,
+        };
+        let mut buf = [0u8; 24];
+        unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut GlQueryInfo, qi); }
+        let err = sys_ioctl(&mut p, &mut h, fd, GLIO_QUERY, &mut buf).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+        // No host call should have been recorded.
+        assert!(h.gl_query_calls.is_empty());
+    }
+
+    #[test]
+    fn glio_query_within_cap_forwards_to_host() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        let qi = GlQueryInfo {
+            op: 1,
+            in_buf_ptr: 0, in_buf_len: 0,
+            out_buf_ptr: 0, out_buf_len: 4,
+            reserved: 0,
+        };
+        let mut buf = [0u8; 24];
+        unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut GlQueryInfo, qi); }
+        sys_ioctl(&mut p, &mut h, fd, GLIO_QUERY, &mut buf).unwrap();
+        assert_eq!(h.gl_query_calls.len(), 1);
+        let call = &h.gl_query_calls[0];
+        assert_eq!(call.op, 1);
+        assert_eq!(call.out_len, 4);
+    }
+
+    #[test]
+    fn glio_present_requires_make_current() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let err = sys_ioctl(&mut p, &mut h, fd, GLIO_PRESENT, &mut [][..]).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+        assert!(h.gl_present_calls.is_empty());
+    }
+
+    #[test]
+    fn glio_present_after_make_current_calls_host() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        sys_ioctl(&mut p, &mut h, fd, GLIO_PRESENT, &mut [][..]).unwrap();
+        assert_eq!(h.gl_present_calls, alloc::vec![p.pid as i32]);
+    }
+
+    #[test]
+    fn glio_submit_bumps_seq_and_calls_host() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+
+        // Cmdbuf binding is established in Task A7 via mmap; for A6 we
+        // synthesize a binding so the SUBMIT path can be exercised in
+        // isolation. The mmap integration test arrives in A7.
+        p.gl_state.as_mut().unwrap().cmdbuf = Some(crate::ofd::CmdbufBinding {
+            addr: 0, len: CMDBUF_LEN, submit_seq: 0,
+        });
+
+        let si = GlSubmitInfo { offset: 0, length: 64 };
+        let mut buf = [0u8; 8];
+        unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut GlSubmitInfo, si); }
+        sys_ioctl(&mut p, &mut h, fd, GLIO_SUBMIT, &mut buf).unwrap();
+        sys_ioctl(&mut p, &mut h, fd, GLIO_SUBMIT, &mut buf).unwrap();
+
+        assert_eq!(h.gl_submit_calls.len(), 2);
+        assert_eq!(p.gl_state.as_ref().unwrap().cmdbuf.unwrap().submit_seq, 2);
+    }
+
+    #[test]
+    fn glio_submit_without_cmdbuf_is_einval() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        let si = GlSubmitInfo { offset: 0, length: 64 };
+        let mut buf = [0u8; 8];
+        unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut GlSubmitInfo, si); }
+        let err = sys_ioctl(&mut p, &mut h, fd, GLIO_SUBMIT, &mut buf).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+    }
+
+    #[test]
+    fn glio_submit_rejects_out_of_range_slice() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        p.gl_state.as_mut().unwrap().cmdbuf = Some(crate::ofd::CmdbufBinding {
+            addr: 0, len: CMDBUF_LEN, submit_seq: 0,
+        });
+        let si = GlSubmitInfo { offset: 0, length: (CMDBUF_LEN as u32) + 1 };
+        let mut buf = [0u8; 8];
+        unsafe { core::ptr::write_unaligned(buf.as_mut_ptr() as *mut GlSubmitInfo, si); }
+        let err = sys_ioctl(&mut p, &mut h, fd, GLIO_SUBMIT, &mut buf).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+    }
+
+    #[test]
+    fn glio_terminate_clears_state_and_destroys_host_objects() {
+        use wasm_posix_shared::gl::*;
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        sys_ioctl(&mut p, &mut h, fd, GLIO_TERMINATE, &mut [][..]).unwrap();
+        assert!(p.gl_state.is_none());
+        assert_eq!(h.gl_destroy_context_calls, alloc::vec![(p.pid as i32, 1u32)]);
+        assert_eq!(h.gl_destroy_surface_calls, alloc::vec![(p.pid as i32, 1u32)]);
+    }
+
+    #[test]
+    fn unknown_dri_ioctl_returns_enotty() {
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        let mut buf = [0u8; 8];
+        let err = sys_ioctl(&mut p, &mut h, fd, 0xDEAD_u32, &mut buf).unwrap_err();
+        assert_eq!(err, Errno::ENOTTY);
+    }
+
+    // ----- Task A7: sys_mmap binds the GL cmdbuf -----
+
+    #[test]
+    fn mmap_dri_renderd128_records_cmdbuf_and_calls_host() {
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+
+        let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        assert_ne!(addr, 0);
+
+        let cb = p.gl_state.as_ref().unwrap().cmdbuf.expect("cmdbuf record");
+        assert_eq!(cb.addr, addr);
+        assert_eq!(cb.len, CMDBUF_LEN);
+        assert_eq!(cb.submit_seq, 0);
+
+        assert_eq!(h.gl_bind_calls.len(), 1);
+        assert_eq!(h.gl_bind_calls[0],
+                   GlBindCall { pid: p.pid as i32, addr, len: CMDBUF_LEN });
+    }
+
+    #[test]
+    fn mmap_before_init_returns_einval() {
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        // No GLIO_INIT — gl_state is None.
+        let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                           PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+        assert!(p.gl_state.is_none());
+        assert!(h.gl_bind_calls.is_empty());
+    }
+
+    #[test]
+    fn mmap_with_wrong_len_returns_einval() {
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN + 4096,
+                           PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+        assert!(p.gl_state.as_ref().unwrap().cmdbuf.is_none());
+        assert!(h.gl_bind_calls.is_empty());
+    }
+
+    #[test]
+    fn second_mmap_of_dri_renderd128_returns_einval() {
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let _a = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                          PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        let err = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                           PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap_err();
+        assert_eq!(err, Errno::EINVAL);
+        assert_eq!(h.gl_bind_calls.len(), 1);
+    }
+
+    // ----- Task A8: cleanup paths -----
+
+    #[test]
+    fn munmap_of_cmdbuf_clears_binding_and_unbinds_host() {
+        use core::sync::atomic::Ordering;
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        sys_munmap(&mut p, &mut h, addr, CMDBUF_LEN).unwrap();
+        assert!(p.gl_state.as_ref().unwrap().cmdbuf.is_none());
+        assert_eq!(h.gl_unbind_calls, alloc::vec![p.pid as i32]);
+        // The fd is still open so ownership is retained until close.
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst),
+                   p.pid as i32);
+        // Closing then releases ownership.
+        sys_close(&mut p, &mut h, fd).unwrap();
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    #[test]
+    fn close_after_munmap_releases_gl_owner() {
+        use core::sync::atomic::Ordering;
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        glio_init_ok(&mut p, &mut h, fd);
+        let addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                            PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        // Closing first doesn't drop the owner — the mmap outlives the fd.
+        sys_close(&mut p, &mut h, fd).unwrap();
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst),
+                   p.pid as i32);
+        sys_munmap(&mut p, &mut h, addr, CMDBUF_LEN).unwrap();
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+        assert_eq!(h.gl_unbind_calls, alloc::vec![p.pid as i32]);
+    }
+
+    #[test]
+    fn execve_releases_gl_state_and_owner() {
+        use core::sync::atomic::Ordering;
+        use wasm_posix_shared::gl::CMDBUF_LEN;
+        use wasm_posix_shared::mmap::{MAP_SHARED, PROT_READ, PROT_WRITE};
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut p, &mut h);
+        init_ctx_surface_and_make_current(&mut p, &mut h, fd);
+        let _addr = sys_mmap(&mut p, &mut h, 0, CMDBUF_LEN,
+                             PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0).unwrap();
+        sys_execve(&mut p, &mut h, b"/bin/sh").unwrap();
+        assert!(p.gl_state.is_none());
+        assert_eq!(h.gl_unbind_calls, alloc::vec![p.pid as i32]);
+        assert_eq!(h.gl_destroy_context_calls, alloc::vec![(p.pid as i32, 1u32)]);
+        assert_eq!(h.gl_destroy_surface_calls, alloc::vec![(p.pid as i32, 1u32)]);
+        assert_eq!(crate::process_table::GL_DEVICE_OWNER.load(Ordering::SeqCst), -1);
+    }
+
+    #[test]
+    fn execve_without_gl_session_is_noop() {
+        let _g = gl_owner_reset();
+        let mut p = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        sys_execve(&mut p, &mut h, b"/bin/sh").unwrap();
+        assert!(h.gl_unbind_calls.is_empty());
+        assert!(h.gl_destroy_context_calls.is_empty());
+        assert!(h.gl_destroy_surface_calls.is_empty());
+    }
+
+    #[test]
+    fn fork_child_image_does_not_inherit_gl_state() {
+        // The fork.rs deserialization sets `gl_state: None` for both the
+        // fork-child Process literal and the exec literal. Round-trip a
+        // parent with a live GL session and assert the child snapshot
+        // drops it. Mirrors the existing FB0 fork behaviour (see
+        // deserialize_fork_state in fork.rs).
+        use crate::fork::{serialize_fork_state, deserialize_fork_state};
+        let _g = gl_owner_reset();
+        let mut parent = Process::new(11);
+        let mut h = TrackingHostIO::new();
+        let fd = open_gl(&mut parent, &mut h);
+        init_ctx_surface_and_make_current(&mut parent, &mut h, fd);
+
+        let mut buf = alloc::vec![0u8; 64 * 1024];
+        let n = serialize_fork_state(&parent, &mut buf).unwrap();
+        let child = deserialize_fork_state(&buf[..n], /* child_pid */ 12).unwrap();
+
+        assert!(child.gl_state.is_none());
+        // Parent's session is untouched.
+        assert!(parent.gl_state.is_some());
     }
 }

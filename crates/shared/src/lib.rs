@@ -17,7 +17,7 @@
 /// commit.
 ///
 /// See `docs/abi-versioning.md` for the full policy.
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 /// Syscall numbers for the POSIX kernel interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1115,6 +1115,131 @@ pub mod fbdev {
     }
 }
 
+/// GLES / EGL ABI: ioctl numbers + marshalled argument structs for
+/// `/dev/dri/renderD128`.
+///
+/// These are part of the kernel↔user-space ABI: any change requires bumping
+/// `ABI_VERSION` (see crate root) and updating `abi/snapshot.json`.
+///
+/// The cmdbuf opcode table (`OP_*`) and sync-query op table (`QOP_*`) live
+/// in Phase B's host bridge (where they're decoded) and the user-space
+/// libGLESv2 stub (where they're encoded). The kernel never decodes either
+/// — it forwards bytes to `HostIO::gl_submit` / `HostIO::gl_query` — so the
+/// kernel ABI carries only the ioctl numbers, the surface-kind tag the
+/// kernel checks, the cmdbuf size, and the four marshalled arg structs.
+pub mod gl {
+    /// Cmdbuf mmap length (1 MiB). Single fixed size in v1; see
+    /// the design doc §3 "Cmdbuf overflow".
+    pub const CMDBUF_LEN: usize = 1 << 20;
+
+    /// Version of the GLES op-table. Bumped independently of `ABI_VERSION`
+    /// when the cmdbuf opcode set changes; the libGLESv2 stub records this
+    /// at compile time and the kernel refuses GLIO_INIT on mismatch.
+    pub const OP_VERSION: u32 = 1;
+
+    // --- ioctl request numbers (DRM 'D' magic, starting at 0x40) -----------
+
+    // GLIO_INIT takes a pointer to a `u32` carrying the client's compile-time
+    // `OP_VERSION`. The kernel rejects mismatches with `ENOSYS` so a process
+    // built against an older op-table can't talk to a newer kernel (and vice
+    // versa) without the divergence being caught at first contact rather than
+    // surfacing later as a silent decode error. See A6's GLIO_INIT handler.
+    pub const GLIO_INIT:            u32 = 0x40;
+    pub const GLIO_TERMINATE:       u32 = 0x41;
+    pub const GLIO_CREATE_CONTEXT:  u32 = 0x42;
+    pub const GLIO_DESTROY_CONTEXT: u32 = 0x43;
+    pub const GLIO_CREATE_SURFACE:  u32 = 0x44;
+    pub const GLIO_DESTROY_SURFACE: u32 = 0x45;
+    pub const GLIO_MAKE_CURRENT:    u32 = 0x46;
+    pub const GLIO_SUBMIT:          u32 = 0x47;
+    pub const GLIO_PRESENT:         u32 = 0x48;
+    pub const GLIO_QUERY:           u32 = 0x49;
+
+    // --- surface kind tags -------------------------------------------------
+
+    /// `kind` value for the bound canvas surface. The only kind v1 supports;
+    /// pbuffers and other EGLSurface variants are added in Phase B alongside
+    /// the host-side surface registry.
+    pub const WPK_SURFACE_DEFAULT: u32 = 1;
+
+    /// Upper bound on `GlQueryInfo.out_buf_len`. The kernel allocates a
+    /// scratch buffer of this size before forwarding the query to the
+    /// host; capping prevents a malicious wasm process from passing
+    /// `0xFFFFFFFE` and OOMing the kernel worker.
+    ///
+    /// 64 KiB comfortably fits every realistic sync-query output: shader
+    /// info logs (typically ~1 KB), program info logs, `glGetString`
+    /// results, framebuffer-completeness, and `glReadPixels` of a 64×64
+    /// RGBA thumbnail (16 KB). Demos that need to read back a full
+    /// framebuffer should do it in tiles.
+    pub const MAX_QUERY_OUT_LEN: u32 = 64 * 1024;
+
+    // --- marshalled ioctl argument structs ---------------------------------
+
+    /// Argument to `GLIO_SUBMIT`. Total: 8 bytes.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct GlSubmitInfo {
+        /// Byte offset within the cmdbuf at which to start decoding.
+        pub offset: u32,
+        /// Number of bytes to decode (must end on a TLV boundary).
+        pub length: u32,
+    }
+
+    /// Argument to `GLIO_CREATE_CONTEXT`. Total: 16 bytes.
+    /// Mirrors a tiny subset of EGL config attrs; v1 only consults
+    /// `client_version`.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct GlContextAttrs {
+        /// EGL client version (2 → GLES 2, 3 → GLES 3).
+        pub client_version: u32,
+        /// Reserved for `share_context`, debug bit, robustness bit, etc.
+        pub reserved: [u32; 3],
+    }
+
+    /// Argument to `GLIO_CREATE_SURFACE`. Total: 32 bytes.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct GlSurfaceAttrs {
+        /// Surface kind (only `WPK_SURFACE_DEFAULT` in v1).
+        pub kind: u32,
+        /// Pbuffer width (default-canvas surfaces ignore this).
+        pub width: u32,
+        /// Pbuffer height (default-canvas surfaces ignore this).
+        pub height: u32,
+        /// EGL config id (opaque; v1 reports a single config "1").
+        pub config_id: u32,
+        /// Reserved.
+        pub reserved: [u32; 4],
+    }
+
+    /// Argument to `GLIO_QUERY`. Total: 24 bytes.
+    /// `in_buf_ptr` / `out_buf_ptr` are wasm-process addresses that Phase B
+    /// dereferences via the host's typed-array view of process memory. v1
+    /// kernel forwards `op` + a kernel-scratch buffer sized by `out_buf_len`
+    /// to `HostIO::gl_query` and ignores the pointers.
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct GlQueryInfo {
+        /// Sync-query op tag. The full table (QOP_*) is owned by the host
+        /// bridge in Phase B; the kernel forwards this value unchanged.
+        pub op: u32,
+        /// Process-relative pointer to the input bytes (Phase B only).
+        pub in_buf_ptr: u32,
+        /// Length of input in bytes (Phase B only).
+        pub in_buf_len: u32,
+        /// Process-relative pointer to the output buffer (Phase B only).
+        pub out_buf_ptr: u32,
+        /// Capacity of the output buffer in bytes. The kernel rejects
+        /// values above `MAX_QUERY_OUT_LEN` to bound the scratch
+        /// allocation and otherwise forwards.
+        pub out_buf_len: u32,
+        /// Reserved for a future async-completion handle.
+        pub reserved: u32,
+    }
+}
+
 #[cfg(test)]
 mod fbdev_tests {
     use super::fbdev::*;
@@ -1125,5 +1250,24 @@ mod fbdev_tests {
         assert_eq!(size_of::<FbBitfield>(), 12);
         assert_eq!(size_of::<FbVarScreenInfo>(), 160);
         assert_eq!(size_of::<FbFixScreenInfo>(), 80);
+    }
+}
+
+#[cfg(test)]
+mod gl_tests {
+    use super::gl::*;
+    use core::mem::size_of;
+
+    #[test]
+    fn struct_sizes_match_abi() {
+        assert_eq!(size_of::<GlSubmitInfo>(),    8);
+        assert_eq!(size_of::<GlContextAttrs>(), 16);
+        assert_eq!(size_of::<GlSurfaceAttrs>(), 32);
+        assert_eq!(size_of::<GlQueryInfo>(),    24);
+    }
+
+    #[test]
+    fn cmdbuf_len_is_one_mib() {
+        assert_eq!(CMDBUF_LEN, 1024 * 1024);
     }
 }
