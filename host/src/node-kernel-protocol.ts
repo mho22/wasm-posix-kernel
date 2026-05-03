@@ -20,6 +20,9 @@ export interface InitMessage {
   };
   /** Virtual path → host filesystem path for exec resolution */
   execPrograms?: Record<string, string>;
+  /** Attach a real-TCP backend (TcpNetworkBackend) to the worker's PlatformIO
+   *  so wasm programs can dial external hosts via Node `net.Socket`. */
+  enableTcpNetwork?: boolean;
 }
 
 export interface SpawnMessage {

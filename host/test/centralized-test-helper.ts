@@ -78,6 +78,10 @@ export interface RunProgramOptions {
   /** Custom PlatformIO (defaults to NodePlatformIO).
    *  When provided, forces main-thread mode (PlatformIO can't be serialized). */
   io?: PlatformIO;
+  /** Attach `TcpNetworkBackend` inside the kernel worker_thread so wasm
+   *  programs can dial external hosts via real Node sockets. Worker-thread
+   *  mode only — incompatible with `io`. */
+  enableTcpNetwork?: boolean;
   /** Map of virtual path → .wasm file path for exec targets */
   execPrograms?: Map<string, string>;
   /** Data to provide on stdin (process will see EOF after this data) */
@@ -145,6 +149,7 @@ async function runInWorkerThread(options: RunProgramOptions): Promise<RunProgram
   const host = new NodeKernelHost({
     maxWorkers: 4,
     execPrograms,
+    enableTcpNetwork: options.enableTcpNetwork,
     onStdout: (_pid: number, data: Uint8Array) => {
       stdout += new TextDecoder().decode(data);
       stdoutChunks.push(new Uint8Array(data));

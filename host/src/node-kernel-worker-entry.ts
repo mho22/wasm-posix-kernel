@@ -17,6 +17,8 @@ import { parentPort } from "node:worker_threads";
 import { readFileSync, existsSync } from "node:fs";
 import { CentralizedKernelWorker } from "./kernel-worker";
 import { NodePlatformIO } from "./platform/node";
+import type { PlatformIO } from "./types";
+import { TcpNetworkBackend } from "./networking/tcp-backend";
 import { NodeWorkerAdapter } from "./worker-adapter";
 import { ThreadPageAllocator } from "./thread-allocator";
 import { patchWasmForThread } from "./worker-main";
@@ -153,7 +155,10 @@ async function handleInit(msg: InitMessage) {
   threadAllocator = new ThreadPageAllocator(maxPages);
   workerAdapter = new NodeWorkerAdapter();
 
-  const io = new NodePlatformIO();
+  const io: PlatformIO = new NodePlatformIO();
+  if (msg.enableTcpNetwork) {
+    io.network = new TcpNetworkBackend();
+  }
 
   kernelWorker = new CentralizedKernelWorker(
     {
