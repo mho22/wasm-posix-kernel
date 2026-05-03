@@ -195,6 +195,7 @@ fi
 NODE_NATIVE_SRCS=(
     "$SCRIPT_DIR/node-compat-native/node-native.c"
     "$SCRIPT_DIR/node-compat-native/hash.c"
+    "$SCRIPT_DIR/node-compat-native/hmac.c"
 )
 NODE_NATIVE_CFLAGS=(
     "${CFLAGS[@]}"

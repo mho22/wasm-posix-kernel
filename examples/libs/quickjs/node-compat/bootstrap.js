@@ -2128,7 +2128,17 @@ const crypto = (() => {
     }
 
     function createHmac(algorithm, key) {
-        return createHash(algorithm); // Simplified
+        const native = _nodeNative.createHmac(algorithm, key);
+        return {
+            update(data) {
+                native.update(data);
+                return this;
+            },
+            digest(encoding) {
+                const buf = Buffer.from(native.digest());
+                return encoding ? buf.toString(encoding) : buf;
+            },
+        };
     }
 
     return {
