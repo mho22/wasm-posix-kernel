@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { filterArgs, parseArgs, needsLinking, COMPILE_FLAGS, LINK_FLAGS } from '../src/lib/flags.ts';
+import { describe, it, expect, afterAll } from 'vitest';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { filterArgs, parseArgs, needsLinking, sourcesNeedGl, userLinkedGl, COMPILE_FLAGS, LINK_FLAGS } from '../src/lib/flags.ts';
 
 describe('filterArgs', () => {
   it('passes through normal flags', () => {
@@ -101,5 +104,66 @@ describe('LINK_FLAGS', () => {
     expect(LINK_FLAGS).toContain('-Wl,--entry=_start');
     expect(LINK_FLAGS).toContain('-Wl,--import-memory');
     expect(LINK_FLAGS).toContain('-Wl,--shared-memory');
+  });
+});
+
+describe('sourcesNeedGl', () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'wpk-flags-'));
+
+  function write(name: string, contents: string): string {
+    const p = join(tmp, name);
+    writeFileSync(p, contents);
+    return p;
+  }
+
+  it('detects #include <EGL/egl.h>', () => {
+    const p = write('a.c', '#include <EGL/egl.h>\nint main(void){}\n');
+    expect(sourcesNeedGl([p])).toBe(true);
+  });
+
+  it('detects #include <GLES2/gl2.h>', () => {
+    const p = write('b.c', '#include <GLES2/gl2.h>\n');
+    expect(sourcesNeedGl([p])).toBe(true);
+  });
+
+  it('detects #include <GLES3/gl3.h>', () => {
+    const p = write('c.c', '#include <GLES3/gl3.h>\n');
+    expect(sourcesNeedGl([p])).toBe(true);
+  });
+
+  it('detects with leading whitespace and quoted form', () => {
+    const p = write('d.c', '   #  include "EGL/egl.h"\n');
+    expect(sourcesNeedGl([p])).toBe(true);
+  });
+
+  it('returns false for plain hello world', () => {
+    const p = write('e.c', '#include <stdio.h>\nint main(void){puts("hi");}\n');
+    expect(sourcesNeedGl([p])).toBe(false);
+  });
+
+  it('skips unreadable files silently', () => {
+    expect(sourcesNeedGl([join(tmp, 'does-not-exist.c')])).toBe(false);
+  });
+
+  afterAll(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+});
+
+describe('userLinkedGl', () => {
+  it('detects -lEGL', () => {
+    expect(userLinkedGl(parseArgs(['foo.c', '-lEGL']))).toBe(true);
+  });
+
+  it('detects -lGLESv2', () => {
+    expect(userLinkedGl(parseArgs(['foo.c', '-lGLESv2']))).toBe(true);
+  });
+
+  it('detects archive path libEGL.a', () => {
+    expect(userLinkedGl(parseArgs(['foo.c', '/some/path/libEGL.a']))).toBe(true);
+  });
+
+  it('returns false for unrelated flags', () => {
+    expect(userLinkedGl(parseArgs(['foo.c', '-lz']))).toBe(false);
   });
 });

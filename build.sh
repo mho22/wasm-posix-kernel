@@ -19,6 +19,11 @@ if [ -f target/wasm64-unknown-unknown/release/wasm_posix_userspace.wasm ]; then
        local-binaries/userspace.wasm
 fi
 
+if [ -f sysroot/include/EGL/egl.h ] && [ -f glue/libegl_stub.c ]; then
+    echo "Building GL stubs (libEGL.a, libGLESv2.a)..."
+    bash scripts/build-gles-stubs.sh
+fi
+
 if [ -d programs ] && ls programs/*.c >/dev/null 2>&1; then
     echo "Building user programs..."
     bash scripts/build-programs.sh
