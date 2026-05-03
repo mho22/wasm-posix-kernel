@@ -856,6 +856,12 @@ export class CentralizedKernelWorker {
         }
         return chunk;
       },
+      // Used by `host_gl_submit` / `host_gl_query` to slice the cmdbuf
+      // out of the process's wasm Memory SAB. Returns undefined for
+      // unknown pids, which the GL bridge interprets as a silent no-op.
+      getProcessMemory: (pid: number): WebAssembly.Memory | undefined => {
+        return this.processes.get(pid)?.memory;
+      },
       onAlarm: (seconds: number): number => {
         const pid = this.currentHandlePid;
         if (pid === 0) return 0;
@@ -6047,8 +6053,11 @@ export class CentralizedKernelWorker {
       // Memory.grow detaches any TypedArray bound to the previous SAB.
       // Any cached framebuffer view on this pid is now invalid; the
       // renderer must rebuild it on the next frame from the new
-      // Memory.buffer. Idempotent for pids without a binding.
+      // Memory.buffer. Idempotent for pids without a binding. Same
+      // contract for the GL cmdbuf view — the next host_gl_submit
+      // rebuilds it.
       this.kernel.framebuffers.rebindMemory(this.currentHandlePid);
+      this.kernel.gl.rebindMemory(this.currentHandlePid);
     }
 
     // Zero the mmap'd region. Anonymous mmap must return zeroed pages (like
