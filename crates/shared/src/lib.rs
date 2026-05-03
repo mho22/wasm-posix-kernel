@@ -1115,18 +1115,20 @@ pub mod fbdev {
     }
 }
 
-/// GLES / EGL ABI: ioctl numbers + marshalled argument structs for
-/// `/dev/dri/renderD128`.
+/// GLES / EGL ABI: ioctl numbers, opcode tables, and marshalled argument
+/// structs for `/dev/dri/renderD128`.
 ///
-/// These are part of the kernel↔user-space ABI: any change requires bumping
-/// `ABI_VERSION` (see crate root) and updating `abi/snapshot.json`.
+/// These are part of the kernel↔user-space ABI: any change to the ioctl
+/// numbers, the marshalled struct layouts, or surface-kind tags requires
+/// bumping `ABI_VERSION` (see crate root) and updating `abi/snapshot.json`.
 ///
-/// The cmdbuf opcode table (`OP_*`) and sync-query op table (`QOP_*`) live
-/// in Phase B's host bridge (where they're decoded) and the user-space
-/// libGLESv2 stub (where they're encoded). The kernel never decodes either
-/// — it forwards bytes to `HostIO::gl_submit` / `HostIO::gl_query` — so the
-/// kernel ABI carries only the ioctl numbers, the surface-kind tag the
-/// kernel checks, the cmdbuf size, and the four marshalled arg structs.
+/// The kernel itself never decodes the cmdbuf opcode (`OP_*`) or sync-query
+/// (`QOP_*`) tables — it forwards bytes to `HostIO::gl_submit` /
+/// `HostIO::gl_query`. The opcodes are still owned by `shared::gl` because
+/// they are the wire contract between Phase B's host TS bridge and Phase
+/// C's user-space `libGLESv2` cmdbuf encoder; both sides mirror this
+/// table. Adding new opcodes bumps `OP_VERSION`, not `ABI_VERSION`, since
+/// the byte layout is unchanged from the kernel's perspective.
 pub mod gl {
     /// Cmdbuf mmap length (1 MiB). Single fixed size in v1; see
     /// the design doc §3 "Cmdbuf overflow".
@@ -1157,10 +1159,10 @@ pub mod gl {
 
     // --- surface kind tags -------------------------------------------------
 
-    /// `kind` value for the bound canvas surface. The only kind v1 supports;
-    /// pbuffers and other EGLSurface variants are added in Phase B alongside
-    /// the host-side surface registry.
+    /// `kind` value for the bound canvas surface.
     pub const WPK_SURFACE_DEFAULT: u32 = 1;
+    /// `kind` value for an off-screen pbuffer surface (Phase C).
+    pub const WPK_SURFACE_PBUFFER: u32 = 2;
 
     /// Upper bound on `GlQueryInfo.out_buf_len`. The kernel allocates a
     /// scratch buffer of this size before forwarding the query to the
@@ -1173,6 +1175,95 @@ pub mod gl {
     /// RGBA thumbnail (16 KB). Demos that need to read back a full
     /// framebuffer should do it in tiles.
     pub const MAX_QUERY_OUT_LEN: u32 = 64 * 1024;
+
+    // --- cmdbuf opcodes (mirrored in host/src/webgl/ops.ts) ----------------
+    //
+    // Layout: TLV `{u16 op, u16 payload_len, payload[payload_len]}` little-
+    // endian. Payload formats are documented inline next to the libGLESv2
+    // stub call sites in glue/libglesv2_stub.c (Phase C).
+
+    pub const OP_CLEAR:                       u16 = 0x0001;
+    pub const OP_CLEAR_COLOR:                 u16 = 0x0002;
+    pub const OP_VIEWPORT:                    u16 = 0x0003;
+    pub const OP_SCISSOR:                     u16 = 0x0004;
+    pub const OP_ENABLE:                      u16 = 0x0005;
+    pub const OP_DISABLE:                     u16 = 0x0006;
+    pub const OP_BLEND_FUNC:                  u16 = 0x0007;
+    pub const OP_DEPTH_FUNC:                  u16 = 0x0008;
+    pub const OP_CULL_FACE:                   u16 = 0x0009;
+    pub const OP_FRONT_FACE:                  u16 = 0x000A;
+    pub const OP_LINE_WIDTH:                  u16 = 0x000B;
+    pub const OP_PIXEL_STOREI:                u16 = 0x000C;
+
+    pub const OP_GEN_BUFFERS:                 u16 = 0x0100;
+    pub const OP_DELETE_BUFFERS:              u16 = 0x0101;
+    pub const OP_BIND_BUFFER:                 u16 = 0x0102;
+    pub const OP_BUFFER_DATA:                 u16 = 0x0103;
+    pub const OP_BUFFER_SUB_DATA:             u16 = 0x0104;
+
+    pub const OP_GEN_TEXTURES:                u16 = 0x0200;
+    pub const OP_DELETE_TEXTURES:             u16 = 0x0201;
+    pub const OP_BIND_TEXTURE:                u16 = 0x0202;
+    pub const OP_TEX_IMAGE_2D:                u16 = 0x0203;
+    pub const OP_TEX_SUB_IMAGE_2D:            u16 = 0x0204;
+    pub const OP_TEX_PARAMETERI:              u16 = 0x0205;
+    pub const OP_ACTIVE_TEXTURE:              u16 = 0x0206;
+    pub const OP_GENERATE_MIPMAP:             u16 = 0x0207;
+
+    pub const OP_CREATE_SHADER:               u16 = 0x0300;
+    pub const OP_SHADER_SOURCE:               u16 = 0x0301;
+    pub const OP_COMPILE_SHADER:              u16 = 0x0302;
+    pub const OP_DELETE_SHADER:               u16 = 0x0303;
+    pub const OP_CREATE_PROGRAM:              u16 = 0x0304;
+    pub const OP_ATTACH_SHADER:               u16 = 0x0305;
+    pub const OP_LINK_PROGRAM:                u16 = 0x0306;
+    pub const OP_USE_PROGRAM:                 u16 = 0x0307;
+    pub const OP_BIND_ATTRIB_LOCATION:        u16 = 0x0308;
+    pub const OP_DELETE_PROGRAM:              u16 = 0x0309;
+
+    pub const OP_UNIFORM1I:                   u16 = 0x0400;
+    pub const OP_UNIFORM1F:                   u16 = 0x0401;
+    pub const OP_UNIFORM2F:                   u16 = 0x0402;
+    pub const OP_UNIFORM3F:                   u16 = 0x0403;
+    pub const OP_UNIFORM4F:                   u16 = 0x0404;
+    pub const OP_UNIFORM_MATRIX4FV:           u16 = 0x0405;
+    /// `glUniform4fv(location, count, value)` — vector form. es2gears uses
+    /// this for the directional light position. `OP_UNIFORM4F` (scalar) is a
+    /// different signature; both are needed.
+    pub const OP_UNIFORM4FV:                  u16 = 0x0406;
+
+    pub const OP_ENABLE_VERTEX_ATTRIB_ARRAY:  u16 = 0x0500;
+    pub const OP_DISABLE_VERTEX_ATTRIB_ARRAY: u16 = 0x0501;
+    pub const OP_VERTEX_ATTRIB_POINTER:       u16 = 0x0502;
+    pub const OP_DRAW_ARRAYS:                 u16 = 0x0503;
+    pub const OP_DRAW_ELEMENTS:               u16 = 0x0504;
+
+    pub const OP_GEN_VERTEX_ARRAYS:           u16 = 0x0600;
+    pub const OP_DELETE_VERTEX_ARRAYS:        u16 = 0x0601;
+    pub const OP_BIND_VERTEX_ARRAY:           u16 = 0x0602;
+
+    pub const OP_GEN_FRAMEBUFFERS:            u16 = 0x0700;
+    pub const OP_BIND_FRAMEBUFFER:            u16 = 0x0701;
+    pub const OP_FRAMEBUFFER_TEXTURE_2D:      u16 = 0x0702;
+    pub const OP_GEN_RENDERBUFFERS:           u16 = 0x0703;
+    pub const OP_BIND_RENDERBUFFER:           u16 = 0x0704;
+    pub const OP_RENDERBUFFER_STORAGE:        u16 = 0x0705;
+    pub const OP_FRAMEBUFFER_RENDERBUFFER:    u16 = 0x0706;
+
+    // --- sync query op tags (used in GlQueryInfo.op) -----------------------
+
+    pub const QOP_GET_ERROR:             u32 = 0x01;
+    pub const QOP_GET_STRING:            u32 = 0x02;
+    pub const QOP_GET_INTEGERV:          u32 = 0x03;
+    pub const QOP_GET_FLOATV:            u32 = 0x04;
+    pub const QOP_GET_UNIFORM_LOC:       u32 = 0x05;
+    pub const QOP_GET_ATTRIB_LOC:        u32 = 0x06;
+    pub const QOP_GET_SHADERIV:          u32 = 0x07;
+    pub const QOP_GET_SHADER_INFO_LOG:   u32 = 0x08;
+    pub const QOP_GET_PROGRAMIV:         u32 = 0x09;
+    pub const QOP_GET_PROGRAM_INFO_LOG:  u32 = 0x0A;
+    pub const QOP_READ_PIXELS:           u32 = 0x0B;
+    pub const QOP_CHECK_FB_STATUS:       u32 = 0x0C;
 
     // --- marshalled ioctl argument structs ---------------------------------
 
@@ -1269,5 +1360,53 @@ mod gl_tests {
     #[test]
     fn cmdbuf_len_is_one_mib() {
         assert_eq!(CMDBUF_LEN, 1024 * 1024);
+    }
+
+    #[test]
+    fn opcodes_are_unique() {
+        let ops: &[u16] = &[
+            OP_CLEAR, OP_CLEAR_COLOR, OP_VIEWPORT, OP_SCISSOR,
+            OP_ENABLE, OP_DISABLE, OP_BLEND_FUNC, OP_DEPTH_FUNC,
+            OP_CULL_FACE, OP_FRONT_FACE, OP_LINE_WIDTH, OP_PIXEL_STOREI,
+            OP_GEN_BUFFERS, OP_DELETE_BUFFERS, OP_BIND_BUFFER,
+            OP_BUFFER_DATA, OP_BUFFER_SUB_DATA,
+            OP_GEN_TEXTURES, OP_DELETE_TEXTURES, OP_BIND_TEXTURE,
+            OP_TEX_IMAGE_2D, OP_TEX_SUB_IMAGE_2D, OP_TEX_PARAMETERI,
+            OP_ACTIVE_TEXTURE, OP_GENERATE_MIPMAP,
+            OP_CREATE_SHADER, OP_SHADER_SOURCE, OP_COMPILE_SHADER,
+            OP_DELETE_SHADER, OP_CREATE_PROGRAM, OP_ATTACH_SHADER,
+            OP_LINK_PROGRAM, OP_USE_PROGRAM, OP_BIND_ATTRIB_LOCATION,
+            OP_DELETE_PROGRAM,
+            OP_UNIFORM1I, OP_UNIFORM1F, OP_UNIFORM2F, OP_UNIFORM3F,
+            OP_UNIFORM4F, OP_UNIFORM_MATRIX4FV, OP_UNIFORM4FV,
+            OP_ENABLE_VERTEX_ATTRIB_ARRAY, OP_DISABLE_VERTEX_ATTRIB_ARRAY,
+            OP_VERTEX_ATTRIB_POINTER, OP_DRAW_ARRAYS, OP_DRAW_ELEMENTS,
+            OP_GEN_VERTEX_ARRAYS, OP_DELETE_VERTEX_ARRAYS,
+            OP_BIND_VERTEX_ARRAY,
+            OP_GEN_FRAMEBUFFERS, OP_BIND_FRAMEBUFFER,
+            OP_FRAMEBUFFER_TEXTURE_2D, OP_GEN_RENDERBUFFERS,
+            OP_BIND_RENDERBUFFER, OP_RENDERBUFFER_STORAGE,
+            OP_FRAMEBUFFER_RENDERBUFFER,
+        ];
+        for (i, &a) in ops.iter().enumerate() {
+            for &b in &ops[i + 1..] {
+                assert_ne!(a, b, "duplicate opcode 0x{a:04x}");
+            }
+        }
+    }
+
+    #[test]
+    fn query_opcodes_are_unique() {
+        let qops: &[u32] = &[
+            QOP_GET_ERROR, QOP_GET_STRING, QOP_GET_INTEGERV,
+            QOP_GET_FLOATV, QOP_GET_UNIFORM_LOC, QOP_GET_ATTRIB_LOC,
+            QOP_GET_SHADERIV, QOP_GET_SHADER_INFO_LOG, QOP_GET_PROGRAMIV,
+            QOP_GET_PROGRAM_INFO_LOG, QOP_READ_PIXELS, QOP_CHECK_FB_STATUS,
+        ];
+        for (i, &a) in qops.iter().enumerate() {
+            for &b in &qops[i + 1..] {
+                assert_ne!(a, b, "duplicate query opcode 0x{a:02x}");
+            }
+        }
     }
 }
