@@ -87,8 +87,22 @@ build_program() {
     name=$(basename "$src" .c)
     local wasm="$out_dir/${name}.wasm"
 
+    # Programs that #include <EGL/...> or <GLES{2,3}/...> get the GL
+    # stub archives appended. Static linking won't pull symbols from
+    # libEGL.a / libGLESv2.a unless the program references them, so
+    # this is a no-op for non-GL programs that don't reference them.
+    local extra_libs=()
+    if grep -qE '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"](EGL|GLES[23]?)/' "$src" 2>/dev/null; then
+        if [ -f "$SYSROOT/lib/libEGL.a" ] && [ -f "$SYSROOT/lib/libGLESv2.a" ]; then
+            extra_libs=("$SYSROOT/lib/libEGL.a" "$SYSROOT/lib/libGLESv2.a")
+        else
+            echo "  Skipping $name: GL archives missing — run scripts/build-gles-stubs.sh." >&2
+            return 0
+        fi
+    fi
+
     echo "  Compiling $name..."
-    "$CC" "${CFLAGS[@]}" "$src" "${LINK_FLAGS[@]}" -o "$wasm"
+    "$CC" "${CFLAGS[@]}" "$src" "${LINK_FLAGS[@]}" ${extra_libs[@]+"${extra_libs[@]}"} -o "$wasm"
 
     # Asyncify for fork/exec support
     if [ -n "$WASM_OPT" ]; then
