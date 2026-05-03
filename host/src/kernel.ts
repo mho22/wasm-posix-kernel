@@ -477,10 +477,7 @@ export class WasmPosixKernel {
           if (!b) return;
           b.contextId = ctxId;
           if (b.forward) {
-            // Main-thread fallback path: the worker has no canvas. Tell
-            // the sibling thread to build the WebGL2 context against
-            // its own HTMLCanvasElement.
-            b.forward.onCreateContext(ctxId);
+            b.forward.onCreateContext();
             return;
           }
           if (!b.canvas) return;
@@ -544,15 +541,9 @@ export class WasmPosixKernel {
             }
           }
           if (b.forward) {
-            // Copy the slice out of the SAB-backed cmdbufView into a
-            // non-shared Uint8Array — the channel will postMessage it
-            // and we don't want the receiving thread to see the bytes
-            // mutate mid-decode if the program reuses the cmdbuf.
+            // slice() detaches from the SAB so postMessage can transfer.
             const off = Number(offset);
-            const len = Number(length);
-            const copy = new Uint8Array(len);
-            copy.set(b.cmdbufView.subarray(off, off + len));
-            b.forward.onSubmit(copy);
+            b.forward.onSubmit(b.cmdbufView.slice(off, off + Number(length)));
             return;
           }
           decodeAndDispatch(b, Number(offset), Number(length));

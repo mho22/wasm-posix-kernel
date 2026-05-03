@@ -7,8 +7,6 @@ import {
 } from "../src/webgl/main-forward.js";
 import * as O from "../src/webgl/ops.js";
 
-/** Minimal `Worker`-shaped stand-in. Captures the message listener so
- *  the test can synthesize `MessageEvent`-shaped payloads. */
 class FakeWorker implements ForwardWorkerLike {
   listener: ((e: MessageEvent) => void) | null = null;
   addEventListener(_t: "message", l: (e: MessageEvent) => void): void {
@@ -23,19 +21,11 @@ class FakeWorker implements ForwardWorkerLike {
   }
 }
 
-/** Recording stub for `WebGL2RenderingContext`; mirrors the pattern in
- *  webgl-bridge.test.ts but only covers the ops used here. */
 class RecordingGl {
   log: Array<[string, unknown[]]> = [];
   clear(m: number) { this.log.push(["clear", [m]]); }
-  clearColor(r: number, g: number, b: number, a: number) {
-    this.log.push(["clearColor", [r, g, b, a]]);
-  }
 }
 
-/** Fake `HTMLCanvasElement` whose `getContext('webgl2', ...)` returns
- *  the supplied stub. setupMainForward calls getContext on
- *  `gl_forward_create_context`, so we record the call to confirm that. */
 function fakeCanvas(stub: RecordingGl): { canvas: HTMLCanvasElement; getContextCalls: unknown[][] } {
   const calls: unknown[][] = [];
   const canvas = {
@@ -47,7 +37,7 @@ function fakeCanvas(stub: RecordingGl): { canvas: HTMLCanvasElement; getContextC
   return { canvas, getContextCalls: calls };
 }
 
-/** Build a minimal cmdbuf with one OP_CLEAR(0x4000) entry. */
+/** One OP_CLEAR(0x4000) entry. */
 function clearCmdbuf(): Uint8Array {
   const bytes = new Uint8Array(8);
   const v = new DataView(bytes.buffer);
@@ -64,12 +54,11 @@ describe("setupMainForward", () => {
     const { canvas, getContextCalls } = fakeCanvas(stub);
     const dispose = setupMainForward(worker, canvas, 7);
 
-    worker.fire({ type: "gl_forward_create_context", pid: 7, ctxId: 99 });
+    worker.fire({ type: "gl_forward_create_context", pid: 7 });
     expect(getContextCalls.length).toBe(1);
     expect(getContextCalls[0][0]).toBe("webgl2");
 
     worker.fire({ type: "gl_forward_destroy_context", pid: 7 });
-    // After destroy, a stray submit must NOT decode (no gl).
     worker.fire({ type: "gl_forward_submit", pid: 7, bytes: clearCmdbuf() });
     expect(stub.log).toEqual([]);
 
@@ -82,7 +71,7 @@ describe("setupMainForward", () => {
     const { canvas } = fakeCanvas(stub);
     const dispose = setupMainForward(worker, canvas, 7);
 
-    worker.fire({ type: "gl_forward_create_context", pid: 7, ctxId: 1 });
+    worker.fire({ type: "gl_forward_create_context", pid: 7 });
     worker.fire({ type: "gl_forward_submit", pid: 7, bytes: clearCmdbuf() });
     expect(stub.log).toEqual([["clear", [0x4000]]]);
 
@@ -95,7 +84,7 @@ describe("setupMainForward", () => {
     const { canvas, getContextCalls } = fakeCanvas(stub);
     const dispose = setupMainForward(worker, canvas, 7);
 
-    worker.fire({ type: "gl_forward_create_context", pid: 99, ctxId: 1 });
+    worker.fire({ type: "gl_forward_create_context", pid: 99 });
     expect(getContextCalls.length).toBe(0);
 
     dispose();
@@ -123,7 +112,7 @@ describe("GlContextRegistry forward channel", () => {
       onSubmit: () => calls.push("submit"),
     });
     expect(reg.get(7)!.forward).not.toBeNull();
-    reg.get(7)!.forward!.onCreateContext(1);
+    reg.get(7)!.forward!.onCreateContext();
     expect(calls).toEqual(["create"]);
   });
 
@@ -168,7 +157,6 @@ describe("GlContextRegistry forward channel", () => {
     });
     reg.unbind(7);
     expect(reg.get(7)).toBeUndefined();
-    // Re-bind: forward must NOT carry over.
     reg.bind({ pid: 7, cmdbufAddr: 0, cmdbufLen: 4 });
     expect(reg.get(7)!.forward).toBeNull();
   });

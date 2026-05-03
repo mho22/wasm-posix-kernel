@@ -128,9 +128,8 @@ function createProcessMemory(ptrWidth: 4 | 8, pages: number): WebAssembly.Memory
 
 // Per-PID thread module cache: lazily compiled on first clone(), shared across
 // all threads of the same process. Keyed by PID of the process that spawned threads.
-/** Pids in main-thread fallback mode for `/dev/dri/renderD128`. Used
- *  to scope the `unbind → gl_forward_unbind` translation so the
- *  OffscreenCanvas path doesn't leak phantom forward messages. */
+/** Pids whose GL is in main-thread fallback mode; scopes the
+ *  unbind → `gl_forward_unbind` translation. */
 const glForwardingPids = new Set<number>();
 
 const threadModuleCache = new Map<number, WebAssembly.Module>();
@@ -319,11 +318,6 @@ async function handleInit(msg: Extract<MainToKernelMessage, { type: "init" }>) {
     );
   });
 
-  // /dev/dri/renderD128 unbind notifications. Forward to main so the
-  // main-thread fallback proxy (setupMainForward) drops its mirror
-  // binding when the program closes the device. The OffscreenCanvas
-  // path is unaffected — its registry lives on this worker and the
-  // kernel calls unbind on it directly.
   kernelWorker.gl.onChange((pid, ev) => {
     if (ev === "unbind" && glForwardingPids.has(pid)) {
       glForwardingPids.delete(pid);
@@ -876,20 +870,14 @@ function handleRegisterPtyOutput(msg: Extract<MainToKernelMessage, { type: "regi
 function handleGlUseMainForward(pid: number): void {
   glForwardingPids.add(pid);
   kernelWorker.gl.attachMainForward(pid, {
-    onCreateContext: (ctxId: number) => {
-      post({ type: "gl_forward_create_context", pid, ctxId });
+    onCreateContext: () => {
+      post({ type: "gl_forward_create_context", pid });
     },
     onDestroyContext: () => {
       post({ type: "gl_forward_destroy_context", pid });
     },
     onSubmit: (bytes: Uint8Array) => {
-      // bytes is already a non-shared copy (kernel.ts allocates fresh
-      // before invoking the channel). Transfer the underlying buffer
-      // so the postMessage is zero-copy on the main side.
-      post(
-        { type: "gl_forward_submit", pid, bytes },
-        [bytes.buffer],
-      );
+      post({ type: "gl_forward_submit", pid, bytes }, [bytes.buffer]);
     },
   });
 }

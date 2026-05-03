@@ -33,20 +33,10 @@ export type GlBindingInput = {
   cmdbufLen: number;
 };
 
-/**
- * Sink for GL lifecycle events when the binding lives on a thread
- * without a usable canvas (browsers without `transferControlToOffscreen`,
- * or any embedder that wants the GL context on the main thread). The
- * worker entry installs one of these per-pid via `attachMainForward`;
- * the channel's methods are expected to `postMessage` the call to a
- * sibling thread that owns the actual `WebGL2RenderingContext`.
- *
- * Bytes handed to `onSubmit` are owned by the channel — the caller has
- * already copied them out of the (shared) cmdbuf, so the channel can
- * transfer or retain them freely.
- */
+/** Bytes handed to `onSubmit` are non-shared — the caller copies them
+ *  out of the SAB-backed cmdbuf so the channel may transfer the buffer. */
 export type GlForwardChannel = {
-  onCreateContext(ctxId: number): void;
+  onCreateContext(): void;
   onDestroyContext(): void;
   onSubmit(bytes: Uint8Array): void;
 };
@@ -88,11 +78,6 @@ export type GlBinding = GlBindingInput & {
    *  current program (e.g. uniform setters). */
   currentProgram: WebGLProgram | null;
 
-  /** When set, the worker has no local canvas for this pid; GL lifecycle
-   *  events are instead pushed to the channel so a sibling thread can
-   *  drive a `WebGL2RenderingContext` on the embedder's behalf. The
-   *  kernel's `host_gl_*` arms in `kernel.ts` short-circuit to the
-   *  channel before touching `b.gl` or the cmdbuf-local dispatch table. */
   forward: GlForwardChannel | null;
 };
 
@@ -102,9 +87,8 @@ export type GlChangeListener = (pid: number, ev: GlChangeEvent) => void;
 export class GlContextRegistry {
   private bindings = new Map<number, GlBinding>();
   private listeners = new Set<GlChangeListener>();
-  /** Forward channels installed before `host_gl_bind` fires for the pid.
-   *  Drained into the binding by `bind()`. Lets the embedder set up
-   *  forwarding without racing the program's first `open("/dev/dri/...")`. */
+  /** Channels installed before `bind()` fires; drained when it does, so
+   *  the embedder can wire forwarding without racing `host_gl_bind`. */
   private pendingForwards = new Map<number, GlForwardChannel>();
 
   bind(b: GlBindingInput): void {
@@ -178,12 +162,6 @@ export class GlContextRegistry {
     }
   }
 
-  /**
-   * Mark this pid as forwarding GL lifecycle to a sibling thread (the
-   * main-thread fallback for browsers without OffscreenCanvas). Safe to
-   * call before `bind()` — the channel is held in a pending map and
-   * applied when the kernel reports the binding.
-   */
   attachMainForward(pid: number, channel: GlForwardChannel): void {
     const b = this.bindings.get(pid);
     if (b) {
