@@ -128,6 +128,11 @@ function createProcessMemory(ptrWidth: 4 | 8, pages: number): WebAssembly.Memory
 
 // Per-PID thread module cache: lazily compiled on first clone(), shared across
 // all threads of the same process. Keyed by PID of the process that spawned threads.
+/** Pids in main-thread fallback mode for `/dev/dri/renderD128`. Used
+ *  to scope the `unbind → gl_forward_unbind` translation so the
+ *  OffscreenCanvas path doesn't leak phantom forward messages. */
+const glForwardingPids = new Set<number>();
+
 const threadModuleCache = new Map<number, WebAssembly.Module>();
 const threadWorkers = new Map<number, Array<{
   worker: ReturnType<BrowserWorkerAdapter["createWorker"]>;
@@ -312,6 +317,18 @@ async function handleInit(msg: Extract<MainToKernelMessage, { type: "init" }>) {
       { type: "fb_write", pid, offset, bytes: new Uint8Array(buf) },
       [buf],
     );
+  });
+
+  // /dev/dri/renderD128 unbind notifications. Forward to main so the
+  // main-thread fallback proxy (setupMainForward) drops its mirror
+  // binding when the program closes the device. The OffscreenCanvas
+  // path is unaffected — its registry lives on this worker and the
+  // kernel calls unbind on it directly.
+  kernelWorker.gl.onChange((pid, ev) => {
+    if (ev === "unbind" && glForwardingPids.has(pid)) {
+      glForwardingPids.delete(pid);
+      post({ type: "gl_forward_unbind", pid });
+    }
   });
 
   // Accept bridge port for HTTP request handling
@@ -854,6 +871,34 @@ function handleRegisterPtyOutput(msg: Extract<MainToKernelMessage, { type: "regi
   });
 }
 
+// ── GL forward (main-thread fallback for browsers without OffscreenCanvas) ──
+
+function handleGlUseMainForward(pid: number): void {
+  glForwardingPids.add(pid);
+  kernelWorker.gl.attachMainForward(pid, {
+    onCreateContext: (ctxId: number) => {
+      post({ type: "gl_forward_create_context", pid, ctxId });
+    },
+    onDestroyContext: () => {
+      post({ type: "gl_forward_destroy_context", pid });
+    },
+    onSubmit: (bytes: Uint8Array) => {
+      // bytes is already a non-shared copy (kernel.ts allocates fresh
+      // before invoking the channel). Transfer the underlying buffer
+      // so the postMessage is zero-copy on the main side.
+      post(
+        { type: "gl_forward_submit", pid, bytes },
+        [bytes.buffer],
+      );
+    },
+  });
+}
+
+function handleGlClearMainForward(pid: number): void {
+  glForwardingPids.delete(pid);
+  kernelWorker.gl.detachMainForward(pid);
+}
+
 // ── Connection Pump (runs inside kernel worker) ──
 
 const encoder = new TextEncoder();
@@ -1238,6 +1283,10 @@ sw.onmessage = (e: MessageEvent) => {
     case "destroy": handleDestroy(msg); break;
     case "register_lazy_files": memfs.importLazyEntries(msg.entries); break;
     case "register_lazy_archives": memfs.importLazyArchiveEntries(msg.entries); break;
+    case "gl_attach_canvas": kernelWorker.gl.attachCanvas(msg.pid, msg.canvas); break;
+    case "gl_detach_canvas": kernelWorker.gl.detachCanvas(msg.pid); break;
+    case "gl_use_main_forward": handleGlUseMainForward(msg.pid); break;
+    case "gl_clear_main_forward": handleGlClearMainForward(msg.pid); break;
     default: {
       // Handle non-protocol messages (e.g., bridge port transfer)
       const raw = e.data as any;

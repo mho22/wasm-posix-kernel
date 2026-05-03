@@ -182,6 +182,47 @@ export interface RegisterLazyArchivesMessage {
   }>;
 }
 
+/**
+ * Transfer an `OffscreenCanvas` to the kernel worker so the per-pid
+ * `GlContextRegistry` binding has a real surface for `getContext('webgl2')`.
+ * This is the preferred path; `setupMainForward` is the fallback for
+ * browsers without `transferControlToOffscreen`.
+ *
+ * The canvas MUST be passed in `transfer` — postMessage clones
+ * non-transferred objects, but `OffscreenCanvas` is not cloneable, so a
+ * non-transferred send fails in the browser.
+ */
+export interface GlAttachCanvasMessage {
+  type: "gl_attach_canvas";
+  pid: number;
+  canvas: OffscreenCanvas;
+}
+
+export interface GlDetachCanvasMessage {
+  type: "gl_detach_canvas";
+  pid: number;
+}
+
+/**
+ * Mark `pid` as forwarding all GL lifecycle events back to the main
+ * thread instead of dispatching against a worker-local context. The
+ * worker entry installs a `GlForwardChannel` on the binding (creating
+ * the binding lazily via `attachMainForward`'s pending map if the
+ * program hasn't called `host_gl_bind` yet); subsequent
+ * `host_gl_create_context` / `host_gl_submit` calls produce
+ * `gl_forward_*` messages that `host/src/webgl/main-forward.ts`
+ * applies to a sibling registry on the main thread.
+ */
+export interface GlUseMainForwardMessage {
+  type: "gl_use_main_forward";
+  pid: number;
+}
+
+export interface GlClearMainForwardMessage {
+  type: "gl_clear_main_forward";
+  pid: number;
+}
+
 export type MainToKernelMessage =
   | InitMessage
   | SpawnMessage
@@ -203,7 +244,11 @@ export type MainToKernelMessage =
   | DestroyMessage
   | RegisterPtyOutputMessage
   | RegisterLazyFilesMessage
-  | RegisterLazyArchivesMessage;
+  | RegisterLazyArchivesMessage
+  | GlAttachCanvasMessage
+  | GlDetachCanvasMessage
+  | GlUseMainForwardMessage
+  | GlClearMainForwardMessage;
 
 // ── Kernel Worker → Main Thread ──
 
@@ -300,6 +345,36 @@ export interface FbWriteMessage {
   bytes: Uint8Array;
 }
 
+/**
+ * Forwarded GL lifecycle events for pids in main-thread fallback mode.
+ * The shapes match `GlForwardMessage` in
+ * `host/src/webgl/main-forward.ts`; that module's `setupMainForward`
+ * is the only intended consumer.
+ */
+export interface GlForwardCreateContextMessage {
+  type: "gl_forward_create_context";
+  pid: number;
+  ctxId: number;
+}
+
+export interface GlForwardDestroyContextMessage {
+  type: "gl_forward_destroy_context";
+  pid: number;
+}
+
+export interface GlForwardSubmitMessage {
+  type: "gl_forward_submit";
+  pid: number;
+  /** Non-shared bytes — the worker copied them out of the cmdbuf SAB
+   *  before posting, and transfers the buffer in `postMessage`. */
+  bytes: Uint8Array;
+}
+
+export interface GlForwardUnbindMessage {
+  type: "gl_forward_unbind";
+  pid: number;
+}
+
 export type KernelToMainMessage =
   | ReadyMessage
   | ResponseMessage
@@ -311,4 +386,8 @@ export type KernelToMainMessage =
   | FbBindMessage
   | FbUnbindMessage
   | FbRebindMemoryMessage
-  | FbWriteMessage;
+  | FbWriteMessage
+  | GlForwardCreateContextMessage
+  | GlForwardDestroyContextMessage
+  | GlForwardSubmitMessage
+  | GlForwardUnbindMessage;

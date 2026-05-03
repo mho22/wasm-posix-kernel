@@ -9,6 +9,7 @@
 
 import { MemoryFileSystem, type LazyFileEntry } from "../../../host/src/vfs/memory-fs";
 import { FramebufferRegistry } from "../../../host/src/framebuffer/registry";
+import { setupMainForward } from "../../../host/src/webgl/main-forward";
 import type {
   MainToKernelMessage,
   KernelToMainMessage,
@@ -692,5 +693,67 @@ export class BrowserKernel {
    */
   getProcessMemory(pid: number): WebAssembly.Memory | undefined {
     return this.fbMemoryByPid.get(pid);
+  }
+
+  /**
+   * Wire `canvas` to the GLES bridge for `pid`. The kernel worker
+   * already owns the per-pid `GlContextRegistry` binding (created on
+   * the program's first `open("/dev/dri/renderD128")`); this call
+   * gives that binding a real surface to render against.
+   *
+   * Two paths:
+   *
+   *   1. **OffscreenCanvas (preferred).** When the platform supports
+   *      `transferControlToOffscreen` we transfer ownership of the
+   *      pixel buffer to the worker, and every subsequent GL call
+   *      runs there with no per-frame postMessage overhead. The
+   *      OffscreenCanvas → worker handoff is the path the spike
+   *      validated and the only one capable of full v1 throughput.
+   *
+   *   2. **Main-thread proxy (fallback).** Older Safari and embedded
+   *      webviews still don't expose `transferControlToOffscreen`.
+   *      For those, the worker forwards lifecycle events and cmdbuf
+   *      bytes via postMessage; `setupMainForward` listens here and
+   *      replays them on a sibling registry against the real canvas.
+   *      Sync `host_gl_query` returns -EPERM in this mode (postMessage
+   *      cannot answer synchronously); programs that rely on
+   *      `glGetUniformLocation`-style calls degrade.
+   *
+   * Returns a disposer that detaches the canvas (preferred path) or
+   * tears down the message listener (fallback path).
+   */
+  attachGlCanvas(
+    pid: number,
+    canvas: HTMLCanvasElement | OffscreenCanvas,
+  ): () => void {
+    if (typeof OffscreenCanvas !== "undefined" && canvas instanceof OffscreenCanvas) {
+      this.kernelWorkerHandle.postMessage(
+        { type: "gl_attach_canvas", pid, canvas },
+        [canvas],
+      );
+      return () => {
+        this.kernelWorkerHandle.postMessage({ type: "gl_detach_canvas", pid });
+      };
+    }
+    const html = canvas as HTMLCanvasElement;
+    if (typeof html.transferControlToOffscreen === "function") {
+      const off = html.transferControlToOffscreen();
+      this.kernelWorkerHandle.postMessage(
+        { type: "gl_attach_canvas", pid, canvas: off },
+        [off],
+      );
+      return () => {
+        this.kernelWorkerHandle.postMessage({ type: "gl_detach_canvas", pid });
+      };
+    }
+    // Fallback: main-thread proxy. Tell the worker to forward GL
+    // lifecycle for this pid, and stand up the local listener that
+    // applies them to a sibling registry + the real canvas.
+    this.kernelWorkerHandle.postMessage({ type: "gl_use_main_forward", pid });
+    const stopListening = setupMainForward(this.kernelWorkerHandle, html, pid);
+    return () => {
+      stopListening();
+      this.kernelWorkerHandle.postMessage({ type: "gl_clear_main_forward", pid });
+    };
   }
 }

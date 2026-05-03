@@ -6285,6 +6285,16 @@ export class CentralizedKernelWorker {
   }
 
   /**
+   * Live `/dev/dri/renderD128` GLES bindings reported by the kernel.
+   * The embedder's kernel-worker entry reaches in here to attach an
+   * `OffscreenCanvas` (preferred) or install a `GlForwardChannel`
+   * for the main-thread fallback path.
+   */
+  get gl() {
+    return this.kernel.gl;
+  }
+
+  /**
    * Return the wasm `Memory` for `pid` (or `undefined` if no such
    * process is registered). Renderers use this to build typed-array
    * views over the bound framebuffer region.

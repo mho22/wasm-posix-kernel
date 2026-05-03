@@ -476,6 +476,13 @@ export class WasmPosixKernel {
           const b = this.gl.get(pid);
           if (!b) return;
           b.contextId = ctxId;
+          if (b.forward) {
+            // Main-thread fallback path: the worker has no canvas. Tell
+            // the sibling thread to build the WebGL2 context against
+            // its own HTMLCanvasElement.
+            b.forward.onCreateContext(ctxId);
+            return;
+          }
           if (!b.canvas) return;
           // Match the FB renderer's premultiplied-alpha / antialias
           // defaults: opaque, no AA — consumers can re-attach with a
@@ -492,6 +499,7 @@ export class WasmPosixKernel {
           b.gl = null;
           b.contextId = null;
           b.currentProgram = null;
+          if (b.forward) b.forward.onDestroyContext();
         },
         host_gl_create_surface: (
           pid: number, surfaceId: number,
@@ -515,7 +523,8 @@ export class WasmPosixKernel {
           pid: number, offset: bigint, length: bigint,
         ): void => {
           const b = this.gl.get(pid);
-          if (!b || !b.gl) return;
+          if (!b) return;
+          if (!b.forward && !b.gl) return;
           if (!b.cmdbufView) {
             const memory = this.callbacks.getProcessMemory?.(pid);
             if (!memory) return;
@@ -533,6 +542,18 @@ export class WasmPosixKernel {
               // refreshed buffer.
               return;
             }
+          }
+          if (b.forward) {
+            // Copy the slice out of the SAB-backed cmdbufView into a
+            // non-shared Uint8Array — the channel will postMessage it
+            // and we don't want the receiving thread to see the bytes
+            // mutate mid-decode if the program reuses the cmdbuf.
+            const off = Number(offset);
+            const len = Number(length);
+            const copy = new Uint8Array(len);
+            copy.set(b.cmdbufView.subarray(off, off + len));
+            b.forward.onSubmit(copy);
+            return;
           }
           decodeAndDispatch(b, Number(offset), Number(length));
         },
