@@ -37,6 +37,9 @@ export interface NodeKernelHostOptions {
   dataBufferSize?: number;
   /** Virtual path → host filesystem path for exec resolution inside the worker */
   execPrograms?: Record<string, string>;
+  /** Attach a real-TCP backend in the worker so wasm programs can dial
+   *  external hosts via Node `net.Socket`. */
+  enableTcpNetwork?: boolean;
   /** Called when a process writes to stdout */
   onStdout?: (pid: number, data: Uint8Array) => void;
   /** Called when a process writes to stderr */
@@ -127,6 +130,7 @@ export class NodeKernelHost {
         },
         execPrograms: this.options.execPrograms,
         rootfsImage: rootfsImage ?? undefined,
+        enableTcpNetwork: this.options.enableTcpNetwork,
       };
       this.worker.postMessage(initMsg);
     });

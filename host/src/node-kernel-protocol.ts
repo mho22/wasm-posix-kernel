@@ -28,6 +28,9 @@ export interface InitMessage {
    * (custom-io / legacy path).
    */
   rootfsImage?: ArrayBuffer;
+  /** Attach a real-TCP backend (TcpNetworkBackend) to the worker's PlatformIO
+   *  so wasm programs can dial external hosts via Node `net.Socket`. */
+  enableTcpNetwork?: boolean;
 }
 
 export interface SpawnMessage {

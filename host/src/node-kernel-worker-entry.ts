@@ -26,6 +26,7 @@ import {
   DEFAULT_MOUNT_SPEC,
   resolveForNode,
 } from "./vfs";
+import { TcpNetworkBackend } from "./networking/tcp-backend";
 import { NodeWorkerAdapter } from "./worker-adapter";
 import { ThreadPageAllocator } from "./thread-allocator";
 import { patchWasmForThread } from "./worker-main";
@@ -273,6 +274,9 @@ async function handleInit(msg: InitMessage) {
   const io: PlatformIO = msg.rootfsImage
     ? buildVirtualPlatformIO(msg.rootfsImage)
     : new NodePlatformIO();
+  if (msg.enableTcpNetwork) {
+    io.network = new TcpNetworkBackend();
+  }
 
   kernelWorker = new CentralizedKernelWorker(
     {
