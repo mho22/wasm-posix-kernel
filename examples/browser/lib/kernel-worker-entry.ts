@@ -128,6 +128,10 @@ function createProcessMemory(ptrWidth: 4 | 8, pages: number): WebAssembly.Memory
 
 // Per-PID thread module cache: lazily compiled on first clone(), shared across
 // all threads of the same process. Keyed by PID of the process that spawned threads.
+/** Pids whose GL is in main-thread fallback mode; scopes the
+ *  unbind → `gl_forward_unbind` translation. */
+const glForwardingPids = new Set<number>();
+
 const threadModuleCache = new Map<number, WebAssembly.Module>();
 const threadWorkers = new Map<number, Array<{
   worker: ReturnType<BrowserWorkerAdapter["createWorker"]>;
@@ -312,6 +316,13 @@ async function handleInit(msg: Extract<MainToKernelMessage, { type: "init" }>) {
       { type: "fb_write", pid, offset, bytes: new Uint8Array(buf) },
       [buf],
     );
+  });
+
+  kernelWorker.gl.onChange((pid, ev) => {
+    if (ev === "unbind" && glForwardingPids.has(pid)) {
+      glForwardingPids.delete(pid);
+      post({ type: "gl_forward_unbind", pid });
+    }
   });
 
   // Accept bridge port for HTTP request handling
@@ -854,6 +865,28 @@ function handleRegisterPtyOutput(msg: Extract<MainToKernelMessage, { type: "regi
   });
 }
 
+// ── GL forward (main-thread fallback for browsers without OffscreenCanvas) ──
+
+function handleGlUseMainForward(pid: number): void {
+  glForwardingPids.add(pid);
+  kernelWorker.gl.attachMainForward(pid, {
+    onCreateContext: () => {
+      post({ type: "gl_forward_create_context", pid });
+    },
+    onDestroyContext: () => {
+      post({ type: "gl_forward_destroy_context", pid });
+    },
+    onSubmit: (bytes: Uint8Array) => {
+      post({ type: "gl_forward_submit", pid, bytes }, [bytes.buffer]);
+    },
+  });
+}
+
+function handleGlClearMainForward(pid: number): void {
+  glForwardingPids.delete(pid);
+  kernelWorker.gl.detachMainForward(pid);
+}
+
 // ── Connection Pump (runs inside kernel worker) ──
 
 const encoder = new TextEncoder();
@@ -1238,6 +1271,10 @@ sw.onmessage = (e: MessageEvent) => {
     case "destroy": handleDestroy(msg); break;
     case "register_lazy_files": memfs.importLazyEntries(msg.entries); break;
     case "register_lazy_archives": memfs.importLazyArchiveEntries(msg.entries); break;
+    case "gl_attach_canvas": kernelWorker.gl.attachCanvas(msg.pid, msg.canvas); break;
+    case "gl_detach_canvas": kernelWorker.gl.detachCanvas(msg.pid); break;
+    case "gl_use_main_forward": handleGlUseMainForward(msg.pid); break;
+    case "gl_clear_main_forward": handleGlClearMainForward(msg.pid); break;
     default: {
       // Handle non-protocol messages (e.g., bridge port transfer)
       const raw = e.data as any;

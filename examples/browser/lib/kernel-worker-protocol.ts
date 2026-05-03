@@ -182,6 +182,29 @@ export interface RegisterLazyArchivesMessage {
   }>;
 }
 
+/** `canvas` MUST be in postMessage transfer list — OffscreenCanvas is
+ *  not structured-cloneable. */
+export interface GlAttachCanvasMessage {
+  type: "gl_attach_canvas";
+  pid: number;
+  canvas: OffscreenCanvas;
+}
+
+export interface GlDetachCanvasMessage {
+  type: "gl_detach_canvas";
+  pid: number;
+}
+
+export interface GlUseMainForwardMessage {
+  type: "gl_use_main_forward";
+  pid: number;
+}
+
+export interface GlClearMainForwardMessage {
+  type: "gl_clear_main_forward";
+  pid: number;
+}
+
 export type MainToKernelMessage =
   | InitMessage
   | SpawnMessage
@@ -203,7 +226,11 @@ export type MainToKernelMessage =
   | DestroyMessage
   | RegisterPtyOutputMessage
   | RegisterLazyFilesMessage
-  | RegisterLazyArchivesMessage;
+  | RegisterLazyArchivesMessage
+  | GlAttachCanvasMessage
+  | GlDetachCanvasMessage
+  | GlUseMainForwardMessage
+  | GlClearMainForwardMessage;
 
 // ── Kernel Worker → Main Thread ──
 
@@ -300,6 +327,28 @@ export interface FbWriteMessage {
   bytes: Uint8Array;
 }
 
+export interface GlForwardCreateContextMessage {
+  type: "gl_forward_create_context";
+  pid: number;
+}
+
+export interface GlForwardDestroyContextMessage {
+  type: "gl_forward_destroy_context";
+  pid: number;
+}
+
+export interface GlForwardSubmitMessage {
+  type: "gl_forward_submit";
+  pid: number;
+  /** Non-shared; buffer is transferred in postMessage. */
+  bytes: Uint8Array;
+}
+
+export interface GlForwardUnbindMessage {
+  type: "gl_forward_unbind";
+  pid: number;
+}
+
 export type KernelToMainMessage =
   | ReadyMessage
   | ResponseMessage
@@ -311,4 +360,8 @@ export type KernelToMainMessage =
   | FbBindMessage
   | FbUnbindMessage
   | FbRebindMemoryMessage
-  | FbWriteMessage;
+  | FbWriteMessage
+  | GlForwardCreateContextMessage
+  | GlForwardDestroyContextMessage
+  | GlForwardSubmitMessage
+  | GlForwardUnbindMessage;

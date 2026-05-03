@@ -9,6 +9,7 @@
 
 import { MemoryFileSystem, type LazyFileEntry } from "../../../host/src/vfs/memory-fs";
 import { FramebufferRegistry } from "../../../host/src/framebuffer/registry";
+import { setupMainForward } from "../../../host/src/webgl/main-forward";
 import type {
   MainToKernelMessage,
   KernelToMainMessage,
@@ -692,5 +693,38 @@ export class BrowserKernel {
    */
   getProcessMemory(pid: number): WebAssembly.Memory | undefined {
     return this.fbMemoryByPid.get(pid);
+  }
+
+  /** Fallback path (no `transferControlToOffscreen`) makes
+   *  `host_gl_query` return -EPERM since postMessage is async. */
+  attachGlCanvas(
+    pid: number,
+    canvas: HTMLCanvasElement | OffscreenCanvas,
+  ): () => void {
+    const off =
+      typeof OffscreenCanvas !== "undefined" && canvas instanceof OffscreenCanvas
+        ? canvas
+        : typeof (canvas as HTMLCanvasElement).transferControlToOffscreen === "function"
+          ? (canvas as HTMLCanvasElement).transferControlToOffscreen()
+          : null;
+    if (off) {
+      this.kernelWorkerHandle.postMessage(
+        { type: "gl_attach_canvas", pid, canvas: off },
+        [off],
+      );
+      return () => {
+        this.kernelWorkerHandle.postMessage({ type: "gl_detach_canvas", pid });
+      };
+    }
+    this.kernelWorkerHandle.postMessage({ type: "gl_use_main_forward", pid });
+    const stopListening = setupMainForward(
+      this.kernelWorkerHandle,
+      canvas as HTMLCanvasElement,
+      pid,
+    );
+    return () => {
+      stopListening();
+      this.kernelWorkerHandle.postMessage({ type: "gl_clear_main_forward", pid });
+    };
   }
 }

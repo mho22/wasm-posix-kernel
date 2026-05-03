@@ -17,6 +17,9 @@ import type { KernelConfig, PlatformIO, StatResult } from "./types";
 import { SharedPipeBuffer } from "./shared-pipe-buffer";
 import { SharedLockTable } from "./shared-lock-table";
 import { FramebufferRegistry } from "./framebuffer/registry";
+import { GlContextRegistry } from "./webgl/registry";
+import { decodeAndDispatch } from "./webgl/bridge";
+import { runGlQuery } from "./webgl/query";
 
 /**
  * Map filesystem error codes to negative errno values.
@@ -95,6 +98,14 @@ export interface KernelCallbacks {
   onStderr?: (data: Uint8Array) => void;
   /** Read up to maxLen bytes from stdin. Return a Uint8Array with available data, or empty/null for EOF. */
   onStdin?: (maxLen: number) => Uint8Array | null;
+  /**
+   * Resolve the wasm `Memory` for `pid`. The GL bridge reads cmdbuf bytes
+   * directly out of the process's Memory SAB on `host_gl_submit` and
+   * `host_gl_query`, so the embedder must thread its per-pid memory map
+   * through this callback. Returning `undefined` is interpreted as "the
+   * process is gone" and turns the GL call into a silent no-op.
+   */
+  getProcessMemory?: (pid: number) => WebAssembly.Memory | undefined;
 }
 
 export class WasmPosixKernel {
@@ -118,6 +129,13 @@ export class WasmPosixKernel {
    * Node) read this on each frame.
    */
   readonly framebuffers = new FramebufferRegistry();
+  /**
+   * Live `/dev/dri/renderD128` GLES sessions. The kernel reports
+   * binds/unbinds via `host_gl_*`; the bridge in `webgl/bridge.ts`
+   * decodes the cmdbuf TLV stream against a per-pid `WebGL2RenderingContext`
+   * once the embedder has attached a canvas (see Task B4 plumbing).
+   */
+  readonly gl = new GlContextRegistry();
 
   /**
    * Merge additional callbacks into the existing set.
@@ -435,32 +453,129 @@ export class WasmPosixKernel {
             this.readKernelBytes(Number(srcPtr), Number(len)),
           );
         },
-        // /dev/dri/renderD128 stubs — satisfy the v7 kernel's host_gl_*
-        // imports so the module instantiates. Real GL bridge lands in Phase B.
-        host_gl_bind: (_pid: number, _addr: bigint, _len: bigint): void => {},
-        host_gl_unbind: (_pid: number): void => {},
+        // /dev/dri/renderD128 hooks. The cmdbuf lives in the process's
+        // wasm Memory SAB; submit/query reach into it via the embedder-
+        // supplied `getProcessMemory` callback. Without an attached
+        // canvas the create-context call leaves `b.gl = null` and
+        // submit/query become silent no-ops, so kernels that haven't
+        // wired a renderer (Node tests, headless smoke runs) stay safe.
+        host_gl_bind: (pid: number, addr: bigint, len: bigint): void => {
+          this.gl.bind({
+            pid,
+            cmdbufAddr: Number(addr),
+            cmdbufLen: Number(len),
+          });
+        },
+        host_gl_unbind: (pid: number): void => {
+          this.gl.unbind(pid);
+        },
         host_gl_create_context: (
-          _pid: number, _ctxId: number,
+          pid: number, ctxId: number,
           _attrsPtr: bigint, _attrsLen: bigint,
-        ): void => {},
-        host_gl_destroy_context: (_pid: number, _ctxId: number): void => {},
+        ): void => {
+          const b = this.gl.get(pid);
+          if (!b) return;
+          b.contextId = ctxId;
+          if (b.forward) {
+            b.forward.onCreateContext();
+            return;
+          }
+          if (!b.canvas) return;
+          // Match the FB renderer's premultiplied-alpha / antialias
+          // defaults: opaque, no AA — consumers can re-attach with a
+          // different config if needed.
+          const ctx = b.canvas.getContext("webgl2", {
+            antialias: false,
+            premultipliedAlpha: false,
+          }) as WebGL2RenderingContext | null;
+          b.gl = ctx;
+        },
+        host_gl_destroy_context: (pid: number, _ctxId: number): void => {
+          const b = this.gl.get(pid);
+          if (!b) return;
+          b.gl = null;
+          b.contextId = null;
+          b.currentProgram = null;
+          if (b.forward) b.forward.onDestroyContext();
+        },
         host_gl_create_surface: (
-          _pid: number, _surfaceId: number,
+          pid: number, surfaceId: number,
           _attrsPtr: bigint, _attrsLen: bigint,
-        ): void => {},
-        host_gl_destroy_surface: (_pid: number, _surfaceId: number): void => {},
+        ): void => {
+          const b = this.gl.get(pid);
+          if (b) b.surfaceId = surfaceId;
+        },
+        host_gl_destroy_surface: (pid: number, _surfaceId: number): void => {
+          const b = this.gl.get(pid);
+          if (b) b.surfaceId = null;
+        },
         host_gl_make_current: (
           _pid: number, _ctxId: number, _surfaceId: number,
-        ): void => {},
+        ): void => {
+          // No-op: WebGL2 binds context per `getContext()`; we already
+          // track ctx + surface ids on the binding. Hook is here for
+          // future multi-context work.
+        },
         host_gl_submit: (
-          _pid: number, _offset: bigint, _length: bigint,
-        ): void => {},
-        host_gl_present: (_pid: number): void => {},
+          pid: number, offset: bigint, length: bigint,
+        ): void => {
+          const b = this.gl.get(pid);
+          if (!b) return;
+          if (!b.forward && !b.gl) return;
+          if (!b.cmdbufView) {
+            const memory = this.callbacks.getProcessMemory?.(pid);
+            if (!memory) return;
+            try {
+              b.cmdbufView = new Uint8Array(
+                memory.buffer,
+                b.cmdbufAddr,
+                b.cmdbufLen,
+              );
+            } catch {
+              // SAB grew between bind and first submit; rebindMemory
+              // would have nulled the view, but the slice() above can
+              // still throw if cmdbufAddr is out of range. Skip this
+              // submit; the next host_gl_submit will retry against the
+              // refreshed buffer.
+              return;
+            }
+          }
+          if (b.forward) {
+            // slice() detaches from the SAB so postMessage can transfer.
+            const off = Number(offset);
+            b.forward.onSubmit(b.cmdbufView.slice(off, off + Number(length)));
+            return;
+          }
+          decodeAndDispatch(b, Number(offset), Number(length));
+        },
+        host_gl_present: (_pid: number): void => {
+          // RAF-driven canvas presentation handles itself in v1. Hook
+          // is here for explicit-swap / pbuffer paths in v2.
+        },
         host_gl_query: (
-          _pid: number, _op: number,
-          _inPtr: bigint, _inLen: bigint,
-          _outPtr: bigint, _outLen: bigint,
-        ): number => 0,
+          pid: number, op: number,
+          inPtr: bigint, inLen: bigint,
+          outPtr: bigint, outLen: bigint,
+        ): number => {
+          const b = this.gl.get(pid);
+          if (!b || !b.gl) return -1;
+          // The kernel's GLIO_QUERY handler caps `out_buf_len` at
+          // `MAX_QUERY_OUT_LEN` (64 KiB) before allocating the scratch,
+          // so by the time we get here the buffers fit in a kernel-
+          // memory window. v1 reads the kernel's scratch (which the
+          // wasm_api layer wrote `inPtr` / `outPtr` into) — Phase B
+          // uses kernel-relative pointers because the cross-instance
+          // user-pointer copy doesn't land until a follow-up.
+          const inBuf = inLen > 0n
+            ? this.readKernelBytes(Number(inPtr), Number(inLen))
+            : new Uint8Array(0);
+          const outBuf = new Uint8Array(Number(outLen));
+          const written = runGlQuery(b, op, inBuf, outBuf);
+          if (written > 0 && Number(outPtr) !== 0) {
+            this.writeKernelBytes(Number(outPtr), outBuf.subarray(0, written));
+          }
+          return written;
+        },
       },
     };
   }
@@ -503,6 +618,13 @@ export class WasmPosixKernel {
     const out = new Uint8Array(len);
     out.set(this.getMemoryBuffer().subarray(ptr, ptr + len));
     return out;
+  }
+
+  /** Copy `bytes` into kernel memory at `ptr`. Used by host imports
+   *  that produce kernel-scratch results (e.g. host_gl_query).
+   */
+  private writeKernelBytes(ptr: number, bytes: Uint8Array): void {
+    this.getMemoryBuffer().set(bytes, ptr);
   }
 
   /**
