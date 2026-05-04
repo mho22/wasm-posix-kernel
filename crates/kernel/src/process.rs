@@ -72,6 +72,11 @@ pub trait HostIO {
     fn host_utimensat(&mut self, path: &[u8], atime_sec: i64, atime_nsec: i64, mtime_sec: i64, mtime_nsec: i64) -> Result<(), Errno>;
     fn host_waitpid(&mut self, pid: i32, options: u32) -> Result<(i32, i32), Errno>;
     fn host_net_connect(&mut self, handle: i32, addr: &[u8], port: u16) -> Result<(), Errno>;
+    /// Query the status of a host-delegated connect that was previously
+    /// kicked off via `host_net_connect`. Returns `Ok(())` once the TCP
+    /// handshake completed successfully, `Err(EAGAIN)` while still pending,
+    /// and `Err(<other>)` if the connect failed (e.g., ECONNREFUSED).
+    fn host_net_connect_status(&mut self, handle: i32) -> Result<(), Errno>;
     fn host_net_send(&mut self, handle: i32, data: &[u8], flags: u32) -> Result<usize, Errno>;
     fn host_net_recv(&mut self, handle: i32, len: u32, flags: u32, buf: &mut [u8]) -> Result<usize, Errno>;
     fn host_net_close(&mut self, handle: i32) -> Result<(), Errno>;
@@ -690,6 +695,7 @@ pub(crate) mod test_host {
         fn host_utimensat(&mut self, _p: &[u8], _as: i64, _an: i64, _ms: i64, _mn: i64) -> Result<(), Errno> { Ok(()) }
         fn host_waitpid(&mut self, _p: i32, _o: u32) -> Result<(i32, i32), Errno> { Err(Errno::ECHILD) }
         fn host_net_connect(&mut self, _h: i32, _a: &[u8], _p: u16) -> Result<(), Errno> { Ok(()) }
+        fn host_net_connect_status(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }
         fn host_net_send(&mut self, _h: i32, d: &[u8], _f: u32) -> Result<usize, Errno> { Ok(d.len()) }
         fn host_net_recv(&mut self, _h: i32, _l: u32, _f: u32, _b: &mut [u8]) -> Result<usize, Errno> { Ok(0) }
         fn host_net_close(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }

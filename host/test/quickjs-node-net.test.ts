@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as net from "node:net";
 import * as os from "node:os";
+import { lookup } from "node:dns";
 import { join, dirname } from "node:path";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -57,6 +58,41 @@ async function pickWasmDialHost(): Promise<string | null> {
 }
 
 const WASM_DIAL_HOST = await pickWasmDialHost();
+
+// Pick a hostname that (a) musl's lookup_name doesn't shortcut inline (i.e.,
+// not "localhost" — see musl/src/network/lookup_name.c), (b) resolves on the
+// host via dns.lookup, and (c) maps to an IP the echo server can be reached
+// at. If no candidate qualifies, the hostname-dial test skips. Exercising
+// real DNS in the wasm host validates the non-blocking getaddrinfo path —
+// the prior implementation deadlocked here because Atomics.wait blocked the
+// same thread libuv needed to dispatch the dns.lookup callback.
+async function dnsLookup(host: string): Promise<string | null> {
+  return new Promise((resolve) =>
+    lookup(host, 4, (err, addr) => resolve(err ? null : addr)),
+  );
+}
+
+async function pickWasmDialHostname(): Promise<string | null> {
+  if (!HAS_NODE) return null;
+  const sysHost = os.hostname();
+  if (!sysHost || sysHost === "localhost") return null;
+  const candidates = [sysHost, `${sysHost}.local`];
+  const probe = net.createServer();
+  await new Promise<void>((r) => probe.listen(0, "0.0.0.0", () => r()));
+  const port = (probe.address() as net.AddressInfo).port;
+  try {
+    for (const c of candidates) {
+      const ip = await dnsLookup(c);
+      if (!ip || ip.startsWith("127.")) continue; // 127.x routes in-kernel
+      if (await tcpReachable(ip, port)) return c;
+    }
+    return null;
+  } finally {
+    await new Promise<void>((r) => probe.close(() => r()));
+  }
+}
+
+const WASM_DIAL_HOSTNAME = await pickWasmDialHostname();
 
 function runNodeNet(src: string, timeout = 15_000) {
   return runCentralizedProgram({
@@ -132,13 +168,29 @@ describe.skipIf(!WASM_DIAL_HOST)(
         sock.on('error', (e) => process.stdout.write('error'));
       `);
       expect(r.exitCode).toBe(0);
-      // Wasm host-delegated connect currently returns 0 from the kernel
-      // before the TCP handshake actually completes (kernel state flips to
-      // Connected optimistically), so a spurious "connected" can precede
-      // "error" for failures. The application still observes the failure;
-      // proper EINPROGRESS plumbing is a follow-up that bumps the kernel ABI.
-      expect(r.stdout).toContain("error");
+      // The host-delegated connect waits for the actual TCP handshake to
+      // resolve via host_net_connect_status before flipping the kernel
+      // socket to Connected, so failures emit only 'error' — no spurious
+      // 'connect' beforehand. Real Node behaviour.
+      expect(r.stdout).toBe("error");
     });
+
+    it.skipIf(!WASM_DIAL_HOSTNAME)(
+      "resolves a real hostname via host DNS without deadlocking",
+      { timeout: 30_000 },
+      async () => {
+        const r = await runNodeNet(`
+          const net = require('net');
+          const sock = net.connect(${echoPort}, ${JSON.stringify(WASM_DIAL_HOSTNAME)});
+          sock.on('connect', () => sock.write('hello'));
+          sock.on('data', (d) => process.stdout.write(d));
+          sock.on('end', () => sock.destroy());
+        `);
+        expect(r.stderr).toBe("");
+        expect(r.exitCode).toBe(0);
+        expect(r.stdout).toBe("hello");
+      },
+    );
 
     it("transfers a payload larger than a single read chunk (>64 KiB)", { timeout: 60_000 }, async () => {
       const bulkServer = net.createServer((s) => {

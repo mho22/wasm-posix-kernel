@@ -83,6 +83,16 @@ export interface PlatformIO {
 
 export interface NetworkIO {
   connect(handle: number, addr: Uint8Array, port: number): void;
+  /**
+   * Status of an in-flight connect started by `connect()`.
+   * Returns:
+   *   0           — TCP handshake completed; socket is connected.
+   *   positive N  — handshake failed with errno N (e.g., 111 for ECONNREFUSED).
+   *   -11         — handshake still pending (EAGAIN).
+   * Backends that complete connects synchronously (e.g. `FetchNetworkBackend`,
+   * which doesn't open a real TCP connection) may return 0 immediately.
+   */
+  connectStatus(handle: number): number;
   send(handle: number, data: Uint8Array, flags: number): number;
   recv(handle: number, maxLen: number, flags: number): Uint8Array;
   close(handle: number): void;
