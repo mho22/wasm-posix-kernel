@@ -127,9 +127,10 @@ startBtn.addEventListener("click", async () => {
   });
 
   // Audio output → AudioContext. fbDOOM's i_kernel_sound module mixes
-  // 8-bit mono SFX into a 16-bit stereo @ 44.1 kHz buffer and writes
-  // it to /dev/dsp every game tic (~28 ms). We poll the kernel ring
-  // every ~50 ms, decode S16 → Float32, and chain the chunks onto the
+  // 8-bit mono SFX plus OPL2-synthesized music (MUS → MIDI → OPL via
+  // i_oplmusic) into a 16-bit stereo @ 44.1 kHz buffer and writes it to
+  // /dev/dsp every game tic (~28 ms). We poll the kernel ring every
+  // ~50 ms, decode S16 → Float32, and chain the chunks onto the
   // AudioContext clock so playback is gapless. The first user-gesture
   // boot button click already happened (it's how we got here), so
   // resume() succeeds without a separate prompt.

@@ -12,36 +12,61 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
 SRC="$HERE/fbdoom-src"
+CDOOM_SRC="$HERE/chocolate-doom-src"
+
+# Pin to chocolate-doom 3.1.0. fbDOOM stripped its OPL/MIDI/MUS sources
+# when removing SDL; we vendor them back so the music path compiles.
+CDOOM_COMMIT="35fb1372d10756ca27eca05665bd8a7cebc71c05" # chocolate-doom-3.1.0
 
 if [ ! -d "$SRC" ]; then
     echo "==> Cloning maximevince/fbDOOM..."
     git clone --depth 1 https://github.com/maximevince/fbDOOM "$SRC"
 fi
 
-# Apply patches every build, skipping any that are already applied. The
-# previous "patch only on fresh clone" gate silently produced a broken
-# wasm whenever the source tree was reused — every required patch was
-# missing, but `make` happily linked it and DOOM trapped at I_InitGraphics.
-#
-# We rely on `git apply --check` to distinguish "needs apply" from
-# "already applied" — `patch --dry-run` prompts on stdin when it
-# detects an already-applied hunk, which makes its exit code unreliable
-# in non-interactive scripts. fbDOOM is cloned via `git clone` above,
-# so the source tree is always a git repo here.
-echo "==> Applying patches..."
-for p in "$HERE/patches/"*.patch; do
-    [ -f "$p" ] || continue
-    name="$(basename "$p")"
-    if (cd "$SRC" && git apply --check "$p") >/dev/null 2>&1; then
-        echo "    $name"
-        (cd "$SRC" && git apply "$p")
-    elif (cd "$SRC" && git apply --reverse --check "$p") >/dev/null 2>&1; then
-        echo "    $name (already applied)"
-    else
-        echo "ERROR: patch $name does not apply cleanly and is not already applied" >&2
-        exit 1
+# Sentinel — last file added by patches/0005-add-music-support.patch. If
+# it's present, the source tree is already fully vendored + patched and
+# we skip both steps. Re-vendoring would clobber 0004's edits to
+# opl.c/opl_internal.h/midifile.c. To force a re-apply (e.g. when
+# iterating on patches), `rm -rf examples/libs/fbdoom/fbdoom-src`.
+SENTINEL="$SRC/fbdoom/opl/opl_kernel.c"
+
+if [ -e "$SENTINEL" ]; then
+    echo "==> Source tree already vendored + patched (sentinel present); skipping."
+else
+    if [ ! -d "$CDOOM_SRC" ]; then
+        echo "==> Cloning chocolate-doom @ $CDOOM_COMMIT for music sources..."
+        # Shallow-by-commit needs `--filter=blob:none` since github
+        # archives don't carry refs/tags reachability for arbitrary SHAs.
+        git clone --filter=blob:none --no-checkout \
+            https://github.com/chocolate-doom/chocolate-doom "$CDOOM_SRC"
+        (cd "$CDOOM_SRC" && git checkout "$CDOOM_COMMIT")
+    elif [ "$(cd "$CDOOM_SRC" && git rev-parse HEAD)" != "$CDOOM_COMMIT" ]; then
+        echo "==> Re-pinning chocolate-doom to $CDOOM_COMMIT..."
+        (cd "$CDOOM_SRC" && git fetch && git checkout "$CDOOM_COMMIT")
     fi
-done
+
+    echo "==> Vendoring OPL/MIDI/MUS sources from chocolate-doom..."
+    mkdir -p "$SRC/fbdoom/opl"
+    for f in opl.c opl.h opl3.c opl3.h opl_internal.h opl_queue.c opl_queue.h; do
+        cp "$CDOOM_SRC/opl/$f" "$SRC/fbdoom/opl/$f"
+    done
+    for f in mus2mid.c mus2mid.h midifile.c midifile.h; do
+        cp "$CDOOM_SRC/src/$f" "$SRC/fbdoom/$f"
+    done
+
+    echo "==> Applying patches..."
+    for p in "$HERE/patches/"*.patch; do
+        [ -f "$p" ] || continue
+        name="$(basename "$p")"
+        if (cd "$SRC" && git apply --check "$p") >/dev/null 2>&1; then
+            echo "    $name"
+            (cd "$SRC" && git apply "$p")
+        else
+            echo "ERROR: patch $name does not apply cleanly" >&2
+            exit 1
+        fi
+    done
+fi
 
 cd "$SRC/fbdoom"
 
@@ -58,7 +83,7 @@ echo "==> Cross-compiling fbdoom (wasm32, NOSDL=1)..."
 # We keep -lm because the SDK doesn't auto-link libm.
 make CC=wasm32posix-cc \
      LD=wasm32posix-cc \
-     CFLAGS="-O2 -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE" \
+     CFLAGS="-O2 -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE -Iopl" \
      LDFLAGS="" \
      LIBS="-lm" \
      NOSDL=1
