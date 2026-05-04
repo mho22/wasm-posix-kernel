@@ -241,6 +241,63 @@ describe("cmdbuf decoder — TLV walker", () => {
     expect(gl.log.find((r) => r[0] === "shaderSource")?.[1]).toEqual([sh, src]);
   });
 
+  it("ShaderSource decodes over a SharedArrayBuffer-backed cmdbuf", () => {
+    // Regression: TextDecoder rejects views over SharedArrayBuffer
+    // (the native cmdbuf when the user program runs against shared
+    // memory — i.e. always, in this kernel). The bridge must copy
+    // before decoding. Without the fix the dispatch throws
+    // "The provided ArrayBufferView value must not be shared".
+    const gl = new RecordingGl();
+    const reg = new GlContextRegistry();
+    reg.bind({ pid: 1, cmdbufAddr: 0, cmdbufLen: 4096 });
+    const b = reg.get(1)!;
+    const sab = new SharedArrayBuffer(4096);
+    b.cmdbufView = new Uint8Array(sab, 0, 4096);
+    b.gl = gl as unknown as WebGL2RenderingContext;
+
+    const t = new Tlv(b.cmdbufView.buffer);
+    const src = "void main(){gl_FragColor=vec4(1.0);}";
+    const srcBytes = new TextEncoder().encode(src);
+
+    let h = t.op(O.OP_CREATE_SHADER, 8);
+    t.view.setUint32(h.p, 0x8B30, true);
+    t.view.setUint32(h.p + 4, 1, true);
+
+    h = t.op(O.OP_SHADER_SOURCE, 8 + srcBytes.byteLength);
+    t.view.setUint32(h.p, 1, true);
+    t.view.setUint32(h.p + 4, srcBytes.byteLength, true);
+    new Uint8Array(t.view.buffer).set(srcBytes, h.p + 8);
+
+    expect(() => decodeAndDispatch(b, 0, t.p)).not.toThrow();
+    expect(gl.log.find((r) => r[0] === "shaderSource")?.[1][1]).toBe(src);
+  });
+
+  it("BindAttribLocation decodes over a SharedArrayBuffer-backed cmdbuf", () => {
+    const gl = new RecordingGl();
+    const reg = new GlContextRegistry();
+    reg.bind({ pid: 1, cmdbufAddr: 0, cmdbufLen: 4096 });
+    const b = reg.get(1)!;
+    const sab = new SharedArrayBuffer(4096);
+    b.cmdbufView = new Uint8Array(sab, 0, 4096);
+    b.gl = gl as unknown as WebGL2RenderingContext;
+
+    const t = new Tlv(b.cmdbufView.buffer);
+    const name = "a_pos";
+    const nameBytes = new TextEncoder().encode(name);
+
+    let h = t.op(O.OP_CREATE_PROGRAM, 4);
+    t.view.setUint32(h.p, 7, true);
+
+    h = t.op(O.OP_BIND_ATTRIB_LOCATION, 12 + nameBytes.byteLength);
+    t.view.setUint32(h.p, 7, true);
+    t.view.setUint32(h.p + 4, 0, true);
+    t.view.setUint32(h.p + 8, nameBytes.byteLength, true);
+    new Uint8Array(t.view.buffer).set(nameBytes, h.p + 12);
+
+    expect(() => decodeAndDispatch(b, 0, t.p)).not.toThrow();
+    expect(gl.log.find((r) => r[0] === "bindAttribLocation")?.[1][2]).toBe(name);
+  });
+
   it("UniformMatrix4fv reads the right number of floats", () => {
     const gl = new RecordingGl();
     const { b } = setupBinding(gl);

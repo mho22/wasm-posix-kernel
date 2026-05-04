@@ -20,7 +20,23 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { browserName: "chromium" },
+      use: {
+        browserName: "chromium",
+        // Enable WebGL2 in headless mode so the gldemo: spec can build
+        // a real WebGL2RenderingContext on the worker-side OffscreenCanvas.
+        // SwiftShader-via-ANGLE is the software GL backend modern
+        // Chromium ships with; the older --use-gl=swiftshader flag is
+        // a no-op on Chrome 110+.
+        launchOptions: {
+          args: [
+            "--use-gl=angle",
+            "--use-angle=swiftshader",
+            "--enable-unsafe-swiftshader",
+            "--ignore-gpu-blocklist",
+            "--enable-features=Vulkan",
+          ],
+        },
+      },
     },
   ],
 });

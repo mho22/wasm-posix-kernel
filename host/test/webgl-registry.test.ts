@@ -71,6 +71,23 @@ describe("GlContextRegistry", () => {
     expect(b.gl).toBeNull();
   });
 
+  it("attachCanvas before bind queues the canvas and drains on bind", () => {
+    const reg = new GlContextRegistry();
+    const canvas = {} as unknown as OffscreenCanvas;
+    reg.attachCanvas(9, canvas);
+    expect(reg.get(9)).toBeUndefined();
+    reg.bind({ pid: 9, cmdbufAddr: 0, cmdbufLen: 4 });
+    expect(reg.get(9)!.canvas).toBe(canvas);
+  });
+
+  it("detachCanvas drops a pending canvas (no binding yet)", () => {
+    const reg = new GlContextRegistry();
+    reg.attachCanvas(9, {} as unknown as OffscreenCanvas);
+    reg.detachCanvas(9);
+    reg.bind({ pid: 9, cmdbufAddr: 0, cmdbufLen: 4 });
+    expect(reg.get(9)!.canvas).toBeNull();
+  });
+
   it("onChange notifies bind/unbind events and the unsubscribe closure works", () => {
     const reg = new GlContextRegistry();
     const seen: Array<[number, string]> = [];

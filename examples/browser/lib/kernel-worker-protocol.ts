@@ -61,6 +61,23 @@ export interface TerminateProcessMessage {
   status: number;
 }
 
+/**
+ * Send a POSIX signal to a kernel process. Fire-and-forget — the host
+ * kernel raises the signal on the target's pending queue, wakes any
+ * blocked usleep/poll, and lets the in-process handler (installed via
+ * `signal(2)` in user space) pick it up on its next syscall boundary.
+ *
+ * Used by the gldemo Stop/Resume buttons (SIGUSR1) to toggle a paused
+ * flag inside cube.wasm without tearing down the worker. No requestId:
+ * the main thread doesn't need an ack — the visible behaviour (paused
+ * canvas, FPS stall) is the feedback.
+ */
+export interface SendSignalMessage {
+  type: "send_signal";
+  pid: number;
+  signal: number;
+}
+
 export interface AppendStdinDataMessage {
   type: "append_stdin_data";
   pid: number;
@@ -205,10 +222,29 @@ export interface GlClearMainForwardMessage {
   pid: number;
 }
 
+/**
+ * Debug-only: request a synchronous gl.readPixels from the worker-side
+ * WebGL2 context for `pid`. The worker replies with a `ResponseMessage`
+ * containing the RGBA bytes. Used by the gldemo Playwright test to
+ * sample pixels off a transferred OffscreenCanvas (where the main
+ * thread has no direct GL context). Format and type are pinned to
+ * RGBA / UNSIGNED_BYTE so the C side doesn't need to know either.
+ */
+export interface GlDebugReadPixelsMessage {
+  type: "gl_debug_read_pixels";
+  requestId: number;
+  pid: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export type MainToKernelMessage =
   | InitMessage
   | SpawnMessage
   | TerminateProcessMessage
+  | SendSignalMessage
   | AppendStdinDataMessage
   | SetStdinDataMessage
   | PtyWriteMessage
@@ -230,7 +266,8 @@ export type MainToKernelMessage =
   | GlAttachCanvasMessage
   | GlDetachCanvasMessage
   | GlUseMainForwardMessage
-  | GlClearMainForwardMessage;
+  | GlClearMainForwardMessage
+  | GlDebugReadPixelsMessage;
 
 // ── Kernel Worker → Main Thread ──
 

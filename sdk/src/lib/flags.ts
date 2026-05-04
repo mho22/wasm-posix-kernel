@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { WasmArch } from './arch.ts';
 import { targetTriple, toolPrefix } from './arch.ts';
 
@@ -185,4 +186,44 @@ export function parseArgs(args: string[]): ParsedArgs {
 export function needsLinking(parsed: ParsedArgs): boolean {
   if (parsed.compileOnly || parsed.preprocessOnly || parsed.assemblyOnly) return false;
   return parsed.sourceFiles.length > 0 || parsed.objectFiles.length > 0;
+}
+
+/**
+ * Detect whether any of the given source files include an EGL or GLES
+ * header. Used by cc.ts to auto-pull libEGL.a + libGLESv2.a when the
+ * user is writing a GL program — saves them from having to know the
+ * archive layout. A textual scan is fine here: matches `#include <EGL/...>`
+ * and `#include <GLES{2,3}/...>` ignoring leading whitespace, and
+ * tolerates `"..."` form too.
+ *
+ * Files that can't be read (missing, binary, etc.) are skipped silently
+ * — clang will surface a real error later if the include is genuinely
+ * needed but we couldn't see it (e.g. the source is a `.S` assembler
+ * file that pulls in headers indirectly).
+ */
+const GL_INCLUDE_RE = /^\s*#\s*include\s*[<"](?:EGL|GLES[23]?)\//m;
+
+export function sourcesNeedGl(sourceFiles: string[]): boolean {
+  for (const path of sourceFiles) {
+    try {
+      const text = readFileSync(path, 'utf8');
+      if (GL_INCLUDE_RE.test(text)) return true;
+    } catch {
+      // Unreadable source — let clang surface the real error.
+    }
+  }
+  return false;
+}
+
+/** True if the user already passed -lEGL or -lGLESv2 (or a *.a path
+ * ending in libEGL.a / libGLESv2.a). Used to suppress the auto-link
+ * when the user is taking explicit control. */
+export function userLinkedGl(parsed: ParsedArgs): boolean {
+  for (const a of parsed.otherArgs) {
+    if (a === '-lEGL' || a === '-lGLESv2') return true;
+  }
+  for (const a of parsed.archiveFiles) {
+    if (a.endsWith('libEGL.a') || a.endsWith('libGLESv2.a')) return true;
+  }
+  return false;
 }
