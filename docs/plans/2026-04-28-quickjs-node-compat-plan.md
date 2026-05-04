@@ -43,7 +43,8 @@ The bridge is **one** new QuickJS C native module exposing four namespaces (`has
 | 1  | 1 | `feat(quickjs-node): real SHA-256/512 via libcrypto` |
 | 2  | 2 | `feat(quickjs-node): real gzip/inflate via libz` |
 | 3  | 3 | `feat(quickjs-node): real AF_INET sockets + event-loop fd-watch` |
-| 4  | 4 | `feat(quickjs-node): TLS via OpenSSL — https.get works` |
+| 4a | 4 | `feat(quickjs): tls.connect via libssl in the wasm sysroot — Phase 4 part 1` |
+| 4b | 4 | `feat(quickjs): real http/https + Mozilla cacert.pem at /etc/ssl/cert.pem — Phase 4 part 2` |
 | 5  | 5 | `feat(quickjs-node): npm install of zero-dep package` |
 | 6  | 6 | `feat(quickjs-node): npm install of express + vite` |
 | 7+ | 7+ | (decision point — see Phase 7) |
