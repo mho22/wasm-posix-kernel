@@ -2790,18 +2790,9 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
             this._socket = null;
             this._connected = false;
             this._headersSent = false;
-            this._reqEnded = false;
             this._destroyed = false;
             this._redirected = false;
             this._pendingBody = []; // chunks buffered until socket is connected
-            this._chunkedRequest = false;
-
-            // Decide outgoing body framing. If user set Content-Length, pass
-            // chunks through verbatim. If user set Transfer-Encoding: chunked,
-            // we wrap each write() in chunked framing. Otherwise (no body,
-            // typical for GET) headers go without either.
-            const te = this.getHeader('transfer-encoding');
-            if (te && /chunked/i.test(te)) this._chunkedRequest = true;
 
             if (cb) this.once('response', cb);
             this._origCb = cb;
@@ -2858,9 +2849,8 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
                 if (this._destroyed) return;
                 this._connected = true;
                 this._sendHeaders();
-                for (const buf of this._pendingBody) this._sendBodyChunk(buf);
+                for (const buf of this._pendingBody) this._socket.write(buf);
                 this._pendingBody = [];
-                if (this._reqEnded) this._sendBodyEnd();
             };
             sock.once('connect', onReady);
             sock.once('secureConnect', onReady);
@@ -2877,24 +2867,6 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
             this._socket.write(Buffer.from(req, 'utf8'));
         }
 
-        _sendBodyChunk(buf) {
-            if (this._chunkedRequest) {
-                const size = buf.length.toString(16);
-                this._socket.write(Buffer.from(size + '\r\n', 'utf8'));
-                this._socket.write(buf);
-                this._socket.write(Buffer.from('\r\n', 'utf8'));
-            } else {
-                this._socket.write(buf);
-            }
-        }
-
-        _sendBodyEnd() {
-            if (this._chunkedRequest) {
-                this._socket.write(Buffer.from('0\r\n\r\n', 'utf8'));
-            }
-            // Allow the server to close after responding.
-        }
-
         _write(chunk, encoding, cb) {
             if (this._destroyed) return cb(new Error('http: request destroyed'));
             const buf = (chunk instanceof Uint8Array) ? Buffer.from(chunk)
@@ -2905,7 +2877,7 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
                 return cb();
             }
             this._sendHeaders();
-            this._sendBodyChunk(buf);
+            this._socket.write(buf);
             cb();
         }
 
@@ -2913,11 +2885,7 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
             if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
             if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
             if (chunk) this.write(chunk, encoding);
-            this._reqEnded = true;
-            if (this._connected) {
-                this._sendHeaders();
-                this._sendBodyEnd();
-            }
+            if (this._connected) this._sendHeaders();
             this._writableState.ended = true;
             this.emit('finish');
             if (cb) cb();
@@ -2948,17 +2916,14 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
             } catch (_) { /* ignore */ }
             // Resolve relative redirects against the current request URL.
             const baseHref = `${this._protocol}//${this._host}${this._port === defaultPort ? '' : ':' + this._port}${this.path}`;
-            let absUrl = location;
-            try { absUrl = url.resolve(baseHref, location); } catch (_) { /* keep raw */ }
+            const absUrl = url.resolve(baseHref, location);
             const u = url.parse(absUrl);
             const targetProto = (u.protocol || this._protocol).toLowerCase();
-            // Cross-scheme redirects (http→https or vice versa) need the *other*
-            // module. Look it up via the module registry — set up below.
-            const mod = (targetProto === 'https:') ? _httpsModuleRef.value
-                      : (targetProto === 'http:') ? _httpModuleRef.value
-                      : null;
-            if (!mod) {
-                this._failed(new Error('http: unsupported redirect protocol: ' + targetProto));
+            // Same-scheme redirects only — cross-scheme (http→https) is out of scope
+            // for this slice. Real CDNs do upgrade-to-https; if Phase 5 hits one,
+            // wire a cross-module registry back in.
+            if (targetProto !== this._protocol) {
+                this._failed(new Error('http: cross-scheme redirect not supported: ' + targetProto));
                 return;
             }
             // Carry the original SNI through. Same-origin redirects (the
@@ -2980,7 +2945,7 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
             };
             // The Host header must update for the new origin.
             delete newOpts.headers['host'];
-            const next = mod.request(newOpts);
+            const next = request(newOpts);
             next.on('response', (msg) => this.emit('response', msg));
             next.on('error', (err) => this.emit('error', err));
             next.end();
@@ -3020,24 +2985,14 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
     return {
         STATUS_CODES, METHODS: HTTP_METHODS,
         request, get,
-        IncomingMessage: stream.Readable,
         ClientRequest,
         Agent: class Agent {},
         globalAgent: {},
-        // Server side stays a stub — outside the scope of Slice B.
-        createServer(options, handler) {
-            if (typeof options === 'function') { handler = options; options = {}; }
-            const server = net.createServer();
-            if (handler) server.on('request', handler);
-            return server;
+        createServer() {
+            throw new Error('http.createServer is not yet implemented (Phase 4 part 2 shipped client-side only)');
         },
     };
 }
-
-// _httpModuleRef / _httpsModuleRef wire cross-scheme redirects (http→https
-// and back) without forcing a strict declaration order.
-const _httpModuleRef = { value: null };
-const _httpsModuleRef = { value: null };
 
 const http = makeHttpModule({
     connect: (opts) => {
@@ -3048,7 +3003,6 @@ const http = makeHttpModule({
     defaultPort: 80,
     defaultProtocol: 'http:',
 });
-_httpModuleRef.value = http;
 
 const https = makeHttpModule({
     connect: (opts) => tls.connect({
@@ -3061,7 +3015,6 @@ const https = makeHttpModule({
     defaultPort: 443,
     defaultProtocol: 'https:',
 });
-_httpsModuleRef.value = https;
 
 // ============================================================
 // Module system (require/module)
