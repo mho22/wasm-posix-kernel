@@ -74,6 +74,7 @@ unsafe extern "C" {
     fn host_utimensat(path_ptr: *const u8, path_len: u32, atime_sec: i64, atime_nsec: i64, mtime_sec: i64, mtime_nsec: i64) -> i32;
     fn host_waitpid(pid: i32, options: u32, status_ptr: *mut i32) -> i32;
     fn host_net_connect(handle: i32, addr_ptr: *const u8, addr_len: u32, port: u32) -> i32;
+    fn host_net_connect_status(handle: i32) -> i32;
     fn host_net_send(handle: i32, buf_ptr: *const u8, buf_len: u32, flags: u32) -> i32;
     fn host_net_recv(handle: i32, buf_ptr: *mut u8, buf_len: u32, flags: u32) -> i32;
     fn host_net_close(handle: i32) -> i32;
@@ -456,6 +457,11 @@ impl HostIO for WasmHostIO {
 
     fn host_net_connect(&mut self, handle: i32, addr: &[u8], port: u16) -> Result<(), Errno> {
         let result = unsafe { host_net_connect(handle, addr.as_ptr(), addr.len() as u32, port as u32) };
+        i32_to_result(result)
+    }
+
+    fn host_net_connect_status(&mut self, handle: i32) -> Result<(), Errno> {
+        let result = unsafe { host_net_connect_status(handle) };
         i32_to_result(result)
     }
 
@@ -5056,6 +5062,10 @@ fn extract_scm_rights(
                                         SocketState::Listening => 2,
                                         SocketState::Connected => 3,
                                         SocketState::Closed => 4,
+                                        // Host-delegated connect in flight —
+                                        // serialise as Closed since the child
+                                        // can't resume the live `net.Socket`.
+                                        SocketState::Connecting => 4,
                                     },
                                     send_buf_idx: sock.send_buf_idx,
                                     recv_buf_idx: sock.recv_buf_idx,

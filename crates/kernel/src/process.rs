@@ -72,6 +72,11 @@ pub trait HostIO {
     fn host_utimensat(&mut self, path: &[u8], atime_sec: i64, atime_nsec: i64, mtime_sec: i64, mtime_nsec: i64) -> Result<(), Errno>;
     fn host_waitpid(&mut self, pid: i32, options: u32) -> Result<(i32, i32), Errno>;
     fn host_net_connect(&mut self, handle: i32, addr: &[u8], port: u16) -> Result<(), Errno>;
+    /// Query the status of a host-delegated connect that was previously
+    /// kicked off via `host_net_connect`. Returns `Ok(())` once the TCP
+    /// handshake completed successfully, `Err(EAGAIN)` while still pending,
+    /// and `Err(<other>)` if the connect failed (e.g., ECONNREFUSED).
+    fn host_net_connect_status(&mut self, handle: i32) -> Result<(), Errno>;
     fn host_net_send(&mut self, handle: i32, data: &[u8], flags: u32) -> Result<usize, Errno>;
     fn host_net_recv(&mut self, handle: i32, len: u32, flags: u32, buf: &mut [u8]) -> Result<usize, Errno>;
     fn host_net_close(&mut self, handle: i32) -> Result<(), Errno>;

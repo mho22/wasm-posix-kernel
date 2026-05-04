@@ -479,6 +479,13 @@ pub fn serialize_fork_state(proc: &Process, buf: &mut [u8]) -> Result<usize, Err
                     SocketState::Listening => 2,
                     SocketState::Connected => 3,
                     SocketState::Closed => 4,
+                    // A fork while a host-delegated connect is still in flight
+                    // can't carry the live `net.Socket` to the child, so the
+                    // child cannot meaningfully resume the handshake. Persist
+                    // as Closed; userspace will see EBADF/ECONNRESET on the
+                    // next operation, matching the behaviour of forking with
+                    // a half-set-up file descriptor.
+                    SocketState::Connecting => 4,
                 })?;
                 // peer_idx, recv_buf_idx, send_buf_idx as Option<u32> (0xFFFFFFFF = None)
                 w.write_u32(sock.peer_idx.map(|v| v as u32).unwrap_or(0xFFFFFFFF))?;
