@@ -398,10 +398,12 @@ const events = (() => {
         }
     }
 
-    const mod = function() { return new EventEmitter(); };
-    mod.EventEmitter = EventEmitter;
-    mod.defaultMaxListeners = 10;
-    mod.once = function(emitter, event) {
+    // require('events') returns the EventEmitter class itself (Node compat).
+    // Subclassing via `class Foo extends require('events')` only works if the
+    // export IS the class — extending a function that returns `new EE()` makes
+    // super() override `this`, leaving derived methods on an unused prototype.
+    EventEmitter.EventEmitter = EventEmitter;
+    EventEmitter.once = function(emitter, event) {
         return new Promise((resolve, reject) => {
             const onEvent = (...args) => {
                 emitter.removeListener('error', onError);
@@ -415,7 +417,7 @@ const events = (() => {
             if (event !== 'error') emitter.once('error', onError);
         });
     };
-    return mod;
+    return EventEmitter;
 })();
 
 // ============================================================
@@ -822,8 +824,9 @@ function _createWriteStream(fd) {
         write(data, encoding, cb) {
             if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
             if (typeof data === 'string') {
-                std.out.puts(data);
-                std.out.flush();
+                const sink = fd === 2 ? std.err : std.out;
+                sink.puts(data);
+                sink.flush();
             } else if (data instanceof Uint8Array) {
                 os.write(fd, data.buffer, data.byteOffset, data.byteLength);
             }
@@ -3025,6 +3028,7 @@ const _builtinModules = {
     'events': events,
     'buffer': { Buffer },
     'fs': fs,
+    'fs/promises': fs.promises,
     'os': nodeOs,
     'util': util,
     'assert': assert,
@@ -3162,61 +3166,84 @@ const Module = {
 };
 _builtinModules['module'] = Module;
 
-function _resolveFile(id, basedir) {
-    // Try exact path, then with extensions
-    const candidates = [id];
-    if (!id.endsWith('.js') && !id.endsWith('.json') && !id.endsWith('.mjs') && !id.endsWith('.cjs')) {
-        candidates.push(id + '.js', id + '.json');
-    }
-    // Try as directory (index.js)
-    candidates.push(id + '/index.js', id + '/index.json');
+// Mode bits for stat(): S_IFDIR / S_IFREG match os.stat() return mode field.
+function _isDir(p) {
+    const [st, err] = os.stat(p);
+    return err === 0 && (st.mode & 0o170000) === 0o40000;
+}
+function _isReg(p) {
+    const [st, err] = os.stat(p);
+    return err === 0 && (st.mode & 0o170000) === 0o100000;
+}
 
-    for (const candidate of candidates) {
-        let fullPath;
-        if (candidate.startsWith('/')) {
-            fullPath = candidate;
-        } else {
-            fullPath = basedir + '/' + candidate;
-        }
-        fullPath = path.normalize(fullPath);
-        const [, err] = os.stat(fullPath);
-        if (err === 0) return fullPath;
+// Resolve a package directory's main entry: package.json#main → index.js.
+// Returns the resolved file path, or null if neither exists.
+function _resolvePackageMain(pkgDir) {
+    const pkgJson = pkgDir + '/package.json';
+    if (_isReg(pkgJson)) {
+        try {
+            const pkg = JSON.parse(std.loadFile(pkgJson));
+            const main = pkg.main || 'index.js';
+            const mainPath = path.resolve(pkgDir, main);
+            if (_isReg(mainPath)) return mainPath;
+            if (_isReg(mainPath + '.js')) return mainPath + '.js';
+            if (_isReg(mainPath + '/index.js')) return mainPath + '/index.js';
+        } catch {}
     }
-
-    // Try node_modules
-    let dir = basedir;
-    while (dir !== '/') {
-        const nmDir = dir + '/node_modules/' + id;
-        for (const ext of ['', '.js', '.json', '/index.js', '/package.json']) {
-            const fullPath = nmDir + ext;
-            const [, err] = os.stat(fullPath);
-            if (err === 0) {
-                if (ext === '/package.json') {
-                    // Read package.json to find main
-                    try {
-                        const pkg = JSON.parse(std.loadFile(fullPath));
-                        const main = pkg.main || 'index.js';
-                        const mainPath = path.resolve(path.dirname(fullPath), main);
-                        const [, merr] = os.stat(mainPath);
-                        if (merr === 0) return mainPath;
-                        // Try with .js
-                        const [, merr2] = os.stat(mainPath + '.js');
-                        if (merr2 === 0) return mainPath + '.js';
-                    } catch {}
-                } else {
-                    return fullPath;
-                }
-            }
-        }
-        dir = path.dirname(dir);
-    }
-
+    if (_isReg(pkgDir + '/index.js')) return pkgDir + '/index.js';
     return null;
 }
 
+function _resolveFile(id, basedir) {
+    // Relative or absolute id: resolve against basedir without node_modules walk.
+    const isRelOrAbs = id.startsWith('/') || id.startsWith('./') || id.startsWith('../');
+    if (isRelOrAbs) {
+        const baseAbs = id.startsWith('/') ? id : basedir + '/' + id;
+        const norm = path.normalize(baseAbs);
+        // 1. exact file
+        if (_isReg(norm)) return norm;
+        // 2. file + .js / .json
+        if (!id.endsWith('.js') && !id.endsWith('.json') && !id.endsWith('.mjs') && !id.endsWith('.cjs')) {
+            if (_isReg(norm + '.js')) return norm + '.js';
+            if (_isReg(norm + '.json')) return norm + '.json';
+        }
+        // 3. directory: package.json#main → index.js
+        if (_isDir(norm)) {
+            const main = _resolvePackageMain(norm);
+            if (main) return main;
+        }
+        return null;
+    }
+
+    // Bare specifier: walk node_modules upward.
+    let dir = basedir;
+    while (true) {
+        const nmDir = dir + '/node_modules/' + id;
+        // 1. nmDir as a regular file (rare: node_modules/foo as a single file)
+        if (_isReg(nmDir)) return nmDir;
+        // 2. nmDir + .js / .json
+        if (_isReg(nmDir + '.js')) return nmDir + '.js';
+        if (_isReg(nmDir + '.json')) return nmDir + '.json';
+        // 3. nmDir is a directory: package.json#main → index.js
+        if (_isDir(nmDir)) {
+            const main = _resolvePackageMain(nmDir);
+            if (main) return main;
+        }
+        if (dir === '/' || dir === '') break;
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return null;
+}
+
+// Shared across every _makeRequire — Node's module cache is process-global,
+// keyed by absolute resolved path. Without this, circular requires loop
+// forever (each module gets its own cache and re-evaluates the cycle).
+const _moduleCache = {};
+
 function _makeRequire(filename) {
     const basedir = path.dirname(filename || process.cwd() + '/repl');
-    const _moduleCache = {};
 
     function require(id) {
         // Built-in modules (with or without 'node:' prefix)
@@ -3307,8 +3334,15 @@ if (typeof execArgv !== 'undefined') {
     process.argv0 = typeof argv0 !== 'undefined' ? argv0 : (process.argv[0] || 'node');
 }
 
-// Global require
-globalThis.require = _makeRequire(process.cwd() + '/repl');
+// Global require. For `node script.js`, basedir is the script's directory
+// so its top-level relative requires resolve against itself, matching Node's
+// per-file require semantics. For -e/-p/REPL (no script in argv), basedir
+// falls back to cwd.
+globalThis.require = _makeRequire(
+    (process.argv && process.argv.length > 1 && process.argv[1] && process.argv[1][0] === '/')
+        ? process.argv[1]
+        : process.cwd() + '/repl'
+);
 
 // Node.js globals
 globalThis.process = process;
@@ -3332,7 +3366,15 @@ globalThis.__dirname = '';
 globalThis.module = { exports: {} };
 globalThis.exports = globalThis.module.exports;
 
-// console already exists in QuickJS, but ensure it has all methods
+// console already exists in QuickJS, but ensure it has all methods.
+// QuickJS-NG's js_std_add_helpers ships only console.log; npm and most Node
+// code expect .error/.warn to land on stderr.
+if (!console.error) {
+    console.error = (...args) => {
+        process.stderr.write(args.map((a) => typeof a === 'string' ? a : util.inspect(a)).join(' ') + '\n');
+    };
+}
+if (!console.warn) console.warn = console.error;
 if (!console.debug) console.debug = console.log;
 if (!console.info) console.info = console.log;
 if (!console.dir) console.dir = (obj) => console.log(util.inspect(obj));
