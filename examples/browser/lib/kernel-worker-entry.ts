@@ -702,6 +702,29 @@ async function handleTerminateProcess(msg: Extract<MainToKernelMessage, { type: 
   respond(msg.requestId, true);
 }
 
+// ── Signals ──
+
+/**
+ * Deliver a signal to a kernel process. Routes through
+ * CentralizedKernelWorker.sendSignalToProcess, which raises the signal
+ * on the target and wakes any blocked sleep / poll the target is
+ * parked in (see kernel-worker.ts).
+ *
+ * Caveat: this does NOT wake a process parked on a blocking pipe
+ * read(2) in centralized mode — the kernel returns EAGAIN, the host
+ * re-parks, and the dequeued signal info gets clobbered on the next
+ * retry. Callers that need to wake a read-blocked process should
+ * either send a stdin byte (the gldemo Stop/Resume buttons do that)
+ * or arrange a pipe-write to land before the signal.
+ *
+ * `sendSignalToProcess` is private on CentralizedKernelWorker — same
+ * `as any` cast used elsewhere in this file for kernel-worker
+ * internals.
+ */
+function handleSendSignal(msg: Extract<MainToKernelMessage, { type: "send_signal" }>) {
+  (kernelWorker as any).sendSignalToProcess(msg.pid, msg.signal);
+}
+
 // ── Pipe operations ──
 
 function handlePipeRead(msg: Extract<MainToKernelMessage, { type: "pipe_read" }>) {
@@ -885,6 +908,32 @@ function handleGlUseMainForward(pid: number): void {
 function handleGlClearMainForward(pid: number): void {
   glForwardingPids.delete(pid);
   kernelWorker.gl.detachMainForward(pid);
+}
+
+/**
+ * Sample pixels from the worker-side WebGL2 context. Returns a
+ * non-shared Uint8Array with `4 * w * h` RGBA bytes (transferred back
+ * to the main thread). When the binding has no live GL context (e.g.
+ * the program hasn't run eglCreateContext yet, or the embedder is on
+ * the main-thread fallback path), the response carries an error so
+ * the caller's Promise rejects rather than seeing an all-zero buffer.
+ */
+function handleGlDebugReadPixels(
+  msg: Extract<MainToKernelMessage, { type: "gl_debug_read_pixels" }>,
+): void {
+  const b = kernelWorker.gl.get(msg.pid);
+  if (!b || !b.gl) {
+    respondError(msg.requestId, `gl_debug_read_pixels: no GL context for pid ${msg.pid}`);
+    return;
+  }
+  const buf = new Uint8Array(4 * msg.w * msg.h);
+  try {
+    b.gl.readPixels(msg.x, msg.y, msg.w, msg.h, b.gl.RGBA, b.gl.UNSIGNED_BYTE, buf);
+  } catch (e) {
+    respondError(msg.requestId, `gl_debug_read_pixels: ${(e as Error).message ?? e}`);
+    return;
+  }
+  post({ type: "response", requestId: msg.requestId, result: buf }, [buf.buffer]);
 }
 
 // ── Connection Pump (runs inside kernel worker) ──
@@ -1253,6 +1302,7 @@ sw.onmessage = (e: MessageEvent) => {
     case "init": handleInit(msg); break;
     case "spawn": handleSpawn(msg); break;
     case "terminate_process": handleTerminateProcess(msg); break;
+    case "send_signal": handleSendSignal(msg); break;
     case "append_stdin_data": kernelWorker.appendStdinData(msg.pid, msg.data); break;
     case "set_stdin_data": kernelWorker.setStdinData(msg.pid, msg.data); break;
     case "pty_write": handlePtyWrite(msg); break;
@@ -1275,6 +1325,7 @@ sw.onmessage = (e: MessageEvent) => {
     case "gl_detach_canvas": kernelWorker.gl.detachCanvas(msg.pid); break;
     case "gl_use_main_forward": handleGlUseMainForward(msg.pid); break;
     case "gl_clear_main_forward": handleGlClearMainForward(msg.pid); break;
+    case "gl_debug_read_pixels": handleGlDebugReadPixels(msg); break;
     default: {
       // Handle non-protocol messages (e.g., bridge port transfer)
       const raw = e.data as any;

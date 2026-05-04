@@ -317,6 +317,7 @@ export default defineConfig({
         benchmark: path.resolve(__dirname, "pages/benchmark/index.html"),
         texlive: path.resolve(__dirname, "pages/texlive/index.html"),
         doom: path.resolve(__dirname, "pages/doom/index.html"),
+        gldemo: path.resolve(__dirname, "pages/gldemo/index.html"),
       },
     },
   },

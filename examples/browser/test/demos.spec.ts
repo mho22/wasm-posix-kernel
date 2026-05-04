@@ -547,6 +547,97 @@ test("@slow lamp: full stack serves WordPress", async ({ page }) => {
   ).toBeVisible({ timeout: 120_000 });
 });
 
+// ─── GL Spinning Cube (fork+pipe two-process demo) ─────────────────
+
+const cubeWasmPath = join(
+  __dirname,
+  "../../..",
+  "local-binaries/programs/wasm32/cube.wasm",
+);
+const hasCubeWasm = existsSync(cubeWasmPath);
+
+test("gldemo: spinning cube renders into the canvas", async ({ page }) => {
+  test.skip(
+    !hasCubeWasm,
+    "cube.wasm not built — run scripts/build-programs.sh after build.sh",
+  );
+  test.setTimeout(60_000);
+
+  const consoleMessages: string[] = [];
+  page.on("console", (msg) => {
+    consoleMessages.push(`[${msg.type()}] ${msg.text()}`);
+  });
+  page.on("pageerror", (err) => {
+    consoleMessages.push(`[pageerror] ${err.message}`);
+  });
+
+  await gotoOrSkip(page, "/pages/gldemo/");
+  await page.click("#start");
+
+  // Wait for the page to acknowledge spawn (button click → kernel boot
+  // + canvas attach + spawn message round-trip). Cube runs forever, so
+  // we don't wait for __glDone — sample frames mid-flight instead.
+  await page.waitForFunction(() => (window as any).__glStarted === true, {
+    timeout: 30_000,
+  });
+
+  // Let the parent walk eglInitialize → eglMakeCurrent → first read +
+  // draw + present. ~1.5s is generous for the fork(2)+pipe(2) handshake
+  // plus a handful of frames so the cube is well into its rotation.
+  await page.waitForTimeout(1500);
+
+  // Read pixels off the placeholder canvas. We sample from the DOM
+  // bitmap rather than worker-side debugReadPixels because the latter
+  // is bound to a worker GL context that gets torn down on page close.
+  const png = await page.locator("canvas#gl").screenshot();
+  const stats = await page.evaluate(async (b64: string) => {
+    const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+    const bmp = await createImageBitmap(blob);
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx = c.getContext("2d")!;
+    ctx.drawImage(bmp, 0, 0);
+    const px = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
+    // Clear colour is (0.05, 0.06, 0.10) → ≈ (13, 15, 26). Cube faces
+    // are saturated reds/greens/blues/yellows/cyans/magentas — every
+    // face has at least one channel ≥ 0.85, so a pixel with max(R,G,B)
+    // ≥ 200 is unambiguously a cube fragment.
+    let nonClear = 0;
+    let rSum = 0, gSum = 0, bSum = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      const r = px[i], g = px[i + 1], b = px[i + 2];
+      if (r >= 200 || g >= 200 || b >= 200) nonClear++;
+      rSum += r; gSum += g; bSum += b;
+    }
+    const n = px.length / 4;
+    return {
+      w: bmp.width,
+      h: bmp.height,
+      nonClear,
+      avg: [Math.round(rSum / n), Math.round(gSum / n), Math.round(bSum / n)],
+    };
+  }, png.toString("base64"));
+
+  // With focal=1.1, dist=4.0 the cube projects into the centre ~30% of
+  // the canvas (max projected coord ≈ ±0.37). The three visible faces
+  // cover ~5-7% of the canvas depending on rotation; assert ≥3% to
+  // catch "all clear" / decode bugs without flaking on thin profiles.
+  const pixels = stats.w * stats.h;
+  if (stats.nonClear <= pixels * 0.03) {
+    console.log("=== GLDEMO CONSOLE (failure diagnostic) ===");
+    for (const m of consoleMessages.slice(-30)) console.log(m);
+    console.log("stats:", stats);
+  }
+  expect(stats.nonClear).toBeGreaterThan(pixels * 0.03);
+
+  // Click Stop — sends SIGUSR1, the cube child stops writing frames,
+  // the canvas freezes on its last commit. Verify the page reflects
+  // the paused state. Teardown happens on test page close.
+  await page.click("#stop");
+  await page.waitForFunction(() => (window as any).__glPaused === true, {
+    timeout: 10_000,
+  });
+});
+
 // ─── Git HTTP Clone ──────────────────────────────────────────────────
 
 const repoRoot = join(__dirname, "../../..");

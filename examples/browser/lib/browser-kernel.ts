@@ -555,6 +555,19 @@ export class BrowserKernel {
     }
   }
 
+  /**
+   * Send a POSIX signal (e.g. SIGUSR1=10) to a process. Fire-and-forget
+   * — the kernel queues the signal and wakes any blocking syscall the
+   * target is parked in. The user-space handler installed via
+   * `signal(2)` runs at the next syscall boundary.
+   *
+   * Used by the gldemo Stop/Resume buttons to toggle cube.wasm's
+   * paused flag without tearing down the worker.
+   */
+  sendSignal(pid: number, signal: number): void {
+    this.sendToKernel({ type: "send_signal", pid, signal });
+  }
+
   /** Terminate a specific process. */
   async terminateProcess(pid: number, status = -1): Promise<void> {
     const requestId = this.nextRequestId++;
@@ -726,5 +739,23 @@ export class BrowserKernel {
       stopListening();
       this.kernelWorkerHandle.postMessage({ type: "gl_clear_main_forward", pid });
     };
+  }
+
+  /**
+   * Debug-only: synchronously sample RGBA pixels from the worker-side
+   * WebGL2 context bound to `pid`. Returns the raw bytes (4 * w * h).
+   * Used by the gldemo Playwright test to assert "the triangle drew"
+   * — Playwright can't read pixels off a transferred OffscreenCanvas
+   * directly. Rejects when there's no live GL context (e.g. the
+   * program hasn't called eglCreateContext yet).
+   */
+  async debugReadPixels(
+    pid: number, x: number, y: number, w: number, h: number,
+  ): Promise<Uint8Array> {
+    const requestId = this.nextRequestId++;
+    return await this.request(requestId, {
+      type: "gl_debug_read_pixels",
+      requestId, pid, x, y, w, h,
+    }) as Uint8Array;
   }
 }

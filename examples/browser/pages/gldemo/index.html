@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Spinning Cube — wasm-posix-kernel</title>
+  <link rel="stylesheet" href="../../lib/layout.css">
+  <style>
+    .gl-page {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+      flex: 1 1 auto;
+    }
+    .gl-frame {
+      background: #000;
+      padding: 8px;
+      border: 1px solid #333;
+      border-radius: 4px;
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+    }
+    canvas#gl {
+      image-rendering: auto;
+      width: 100%;
+      height: 384px;
+      object-fit: contain;
+      display: block;
+      background: #000;
+    }
+    .gl-status {
+      color: #888;
+      font-family: monospace;
+    }
+    .gl-fps {
+      color: #6cf;
+      font-family: monospace;
+      margin-left: 12px;
+    }
+    .gl-notes {
+      color: #ccc;
+      font-size: 0.9em;
+      max-width: 760px;
+      line-height: 1.5;
+    }
+    .gl-notes code {
+      color: #6cf;
+    }
+  </style>
+</head>
+<body>
+  <nav class="sidebar">
+    <div class="sidebar-title">Demos</div>
+    <a href="/">Simple Programs</a>
+    <a href="/pages/nginx/">nginx</a>
+    <a href="/pages/php/">PHP CLI</a>
+    <a href="/pages/nginx-php/">nginx + PHP-FPM</a>
+    <a href="/pages/mariadb/">MariaDB</a>
+    <a href="/pages/redis/">Redis</a>
+    <a href="/pages/wordpress/">WordPress (LEMP-but-SQLite)</a>
+    <a href="/pages/lamp/">WordPress (LEMP)</a>
+    <a href="/pages/shell/">Shell</a>
+    <a href="/pages/python/">Python</a>
+    <a href="/pages/perl/">Perl</a>
+    <a href="/pages/ruby/">Ruby</a>
+    <a href="/pages/erlang/">Erlang</a>
+    <a href="/pages/texlive/">TeX Live</a>
+    <a href="/pages/doom/">DOOM</a>
+    <a href="/pages/gldemo/" aria-current="page">WebGL - Spinning Cube</a>
+  </nav>
+  <div class="main gl-page">
+    <div class="main-header">
+      <h1>Spinning Cube — fork(2) + pipe(2) + GLES2</h1>
+      <p class="subtitle">
+        A single C source file (<code>programs/cube.c</code>) that
+        <code>fork()</code>s into two cooperating processes: the child
+        rotates the cube in 3D and projects to clip space; the parent
+        renders the resulting triangles via the kernel's
+        <code>/dev/dri/renderD128</code> WebGL2 bridge. They communicate
+        through a real <code>pipe(2)</code> — no JS bootstrap per
+        process, no <code>MessagePort</code>, just kernel pipe buffers.
+      </p>
+    </div>
+
+    <div>
+      <button id="start" class="primary">Start</button>
+      <button id="stop" disabled>Stop</button>
+      <span class="gl-status" id="status" style="margin-left: 12px;">Click Start to spawn the cube.</span>
+      <span class="gl-fps" id="fps"></span>
+    </div>
+
+    <div class="gl-frame">
+      <canvas id="gl" width="768" height="768"></canvas>
+    </div>
+
+    <div class="gl-notes">
+      <p>
+        The child writes one frame's worth of transformed vertices
+        (36 triangle verts × 6 floats = 864 bytes) per pipe write —
+        below <code>PIPE_BUF</code>, so each frame is delivered atomically.
+        FPS lines on the right come from the parent's
+        <code>printf</code> over the kernel's stdout — proof the POSIX
+        side is alive.
+      </p>
+    </div>
+  </div>
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>
