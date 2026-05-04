@@ -17,7 +17,7 @@
 /// commit.
 ///
 /// See `docs/abi-versioning.md` for the full policy.
-pub const ABI_VERSION: u32 = 12;
+pub const ABI_VERSION: u32 = 11;
 
 /// Syscall numbers for the POSIX kernel interface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

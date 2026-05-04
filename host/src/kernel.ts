@@ -1845,21 +1845,12 @@ export class WasmPosixKernel {
     }
   }
 
-  /**
-   * Returns:
-   *   0    — connect completed; socket is connected.
-   *   -N   — connect failed (negative errno, e.g. -111 = -ECONNREFUSED).
-   *   -11  — still pending (-EAGAIN); kernel keeps polling.
-   */
   private hostNetConnectStatus(handle: number): number {
     if (!this.io.network) return -107; // -ENOTCONN
     try {
+      // Backend returns positive errno on failure; kernel expects negative.
       const status = this.io.network.connectStatus(handle);
-      // Backend convention: 0 = connected, positive errno = error,
-      // -EAGAIN = still pending. Convert positive errno → negative for the
-      // kernel's `i32_to_result` mapping.
-      if (status > 0) return -status;
-      return status;
+      return status > 0 ? -status : status;
     } catch {
       return -107; // -ENOTCONN
     }

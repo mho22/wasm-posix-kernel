@@ -40,12 +40,8 @@ describe("getaddrinfo override", () => {
   it.skipIf(!HAS_PUBLIC_DNS)(
     "resolves a hostname through TcpNetworkBackend without deadlocking on real DNS",
     async () => {
-      // The TcpNetworkBackend's getaddrinfo uses Node's dns.lookup, whose
-      // libuv callback dispatches on the same thread that hosts the kernel.
-      // A previous Atomics.wait-based implementation deadlocked here. The
-      // non-blocking implementation throws EagainError until the callback
-      // fires; the kernel-worker retries via setTimeout, which yields the
-      // event loop and lets libuv run the callback.
+      // Regression: a prior Atomics.wait-based getaddrinfo deadlocked the
+      // kernel thread against libuv's dns.lookup callback.
       const io = new NodePlatformIO();
       (io as any).network = new TcpNetworkBackend();
 
@@ -55,9 +51,6 @@ describe("getaddrinfo override", () => {
       });
 
       expect(stdout).toContain("OK: numeric IP resolved to 127.0.0.1");
-      expect(stdout).toContain("OK: example.com resolved to ");
-      // Real DNS, so the IP isn't synthetic 10.x.x.x — sanity-check it's a
-      // plausible IPv4 (four decimal octets).
       expect(stdout).toMatch(/OK: example\.com resolved to (\d{1,3}\.){3}\d{1,3}/);
       expect(stdout).toContain("ALL TESTS PASSED");
       expect(exitCode).toBe(0);
