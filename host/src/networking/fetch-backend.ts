@@ -45,12 +45,7 @@ export class FetchNetworkBackend implements NetworkIO {
     });
   }
 
-  /**
-   * Fetch backend has no real handshake — `fetch()` is deferred until `send()`
-   * receives a complete request. The "connect" is therefore always immediate
-   * from the kernel's perspective; report success as soon as the handle is
-   * known.
-   */
+  // fetch() is deferred to send(); connect always completes synchronously.
   connectStatus(handle: number): number {
     return this.connections.has(handle) ? 0 : 107; // 107 = ENOTCONN
   }

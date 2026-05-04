@@ -59,13 +59,9 @@ async function pickWasmDialHost(): Promise<string | null> {
 
 const WASM_DIAL_HOST = await pickWasmDialHost();
 
-// Pick a hostname that (a) musl's lookup_name doesn't shortcut inline (i.e.,
-// not "localhost" — see musl/src/network/lookup_name.c), (b) resolves on the
-// host via dns.lookup, and (c) maps to an IP the echo server can be reached
-// at. If no candidate qualifies, the hostname-dial test skips. Exercising
-// real DNS in the wasm host validates the non-blocking getaddrinfo path —
-// the prior implementation deadlocked here because Atomics.wait blocked the
-// same thread libuv needed to dispatch the dns.lookup callback.
+// Pick a hostname that (a) isn't shortcut by musl (not "localhost"), (b)
+// resolves via dns.lookup, (c) maps to an IP the echo server is reachable
+// at. Skips otherwise. Exercises the non-blocking getaddrinfo path.
 async function dnsLookup(host: string): Promise<string | null> {
   return new Promise((resolve) =>
     lookup(host, 4, (err, addr) => resolve(err ? null : addr)),
@@ -168,10 +164,6 @@ describe.skipIf(!WASM_DIAL_HOST)(
         sock.on('error', (e) => process.stdout.write('error'));
       `);
       expect(r.exitCode).toBe(0);
-      // The host-delegated connect waits for the actual TCP handshake to
-      // resolve via host_net_connect_status before flipping the kernel
-      // socket to Connected, so failures emit only 'error' — no spurious
-      // 'connect' beforehand. Real Node behaviour.
       expect(r.stdout).toBe("error");
     });
 

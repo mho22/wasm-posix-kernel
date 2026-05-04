@@ -5062,9 +5062,7 @@ fn extract_scm_rights(
                                         SocketState::Listening => 2,
                                         SocketState::Connected => 3,
                                         SocketState::Closed => 4,
-                                        // Host-delegated connect in flight —
-                                        // serialise as Closed since the child
-                                        // can't resume the live `net.Socket`.
+                                        // See fork.rs serialise_fork_state.
                                         SocketState::Connecting => 4,
                                     },
                                     send_buf_idx: sock.send_buf_idx,

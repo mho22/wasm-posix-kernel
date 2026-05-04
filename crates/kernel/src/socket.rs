@@ -23,10 +23,7 @@ pub enum SocketState {
     Unbound,
     Bound,
     Listening,
-    /// Host-delegated connect kicked off but TCP handshake not yet finished.
-    /// `sys_poll` queries the host via `host_net_connect_status`; only when
-    /// the host reports connected (or errored) does POLLOUT fire and the
-    /// userspace `getsockopt(SO_ERROR)` resolve.
+    /// Host-delegated connect kicked off, TCP handshake not yet completed.
     Connecting,
     Connected,
     Closed,
@@ -83,10 +80,8 @@ pub struct SocketInfo {
     pub send_timeout_us: u64,
     /// Bound filesystem path for AF_UNIX sockets.
     pub bind_path: Option<Vec<u8>>,
-    /// Errno from a failed host-delegated `connect`. Set when sys_poll or
-    /// sys_getsockopt observes that `host_net_connect_status` returned an
-    /// error; read by sys_getsockopt(SO_ERROR) to surface the failure to
-    /// userspace. 0 means no error (connect succeeded or still pending).
+    /// Errno cached from a failed host-delegated connect; read and cleared
+    /// by SO_ERROR (Linux semantics). 0 means no error.
     pub connect_error: u32,
 }
 

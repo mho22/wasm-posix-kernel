@@ -4576,11 +4576,7 @@ pub fn sys_getsockopt(
                 SocketDomain::Inet => AF_INET,
                 SocketDomain::Inet6 => AF_INET6,
             }),
-            // SO_ERROR returns the most recent socket error and (per Linux)
-            // clears it. For host-delegated sockets we cache the connect
-            // failure errno on the socket; userspace checks this after the
-            // WATCH_CONNECT poll fires to decide whether the connect
-            // succeeded. Reading clears so a subsequent getsockopt returns 0.
+            // Linux semantics: return cached errno and clear it.
             SO_ERROR => {
                 let err = sock.connect_error;
                 if err != 0 {
@@ -5031,28 +5027,17 @@ pub fn sys_connect(proc: &mut Process, host: &mut dyn HostIO, fd: i32, addr: &[u
 
                 Ok(())
             } else {
-                // External connection: delegate to host. Two-phase to avoid
-                // racing the TCP handshake. First call kicks off the async
-                // host-side connect (state Unbound→Connecting); subsequent
-                // retries (and the userspace poll/getsockopt path) query
-                // `host_net_connect_status` until the handshake either
-                // completes (Connecting→Connected, return 0) or errors
-                // (Connecting→Closed, return the errno). EAGAIN means the
-                // handshake is still in flight — the kernel-worker retries
-                // for blocking sockets and surfaces it to userspace for
-                // O_NONBLOCK ones, matching POSIX nonblock connect closely
-                // enough for socket.c (which accepts EAGAIN, EINPROGRESS,
-                // and EALREADY interchangeably).
+                // External connection: two-phase. First call kicks off the
+                // async host-side connect; subsequent calls (driven by the
+                // userspace poll/getsockopt loop) query host_net_connect_status
+                // until the TCP handshake either completes or errors. EAGAIN
+                // surfaces while still in flight.
                 let net_handle = sock_idx as i32;
-                let needs_kickoff = sock.state != SocketState::Connecting;
-                if needs_kickoff {
+                if sock.state != SocketState::Connecting {
                     host.host_net_connect(net_handle, &ip, port)?;
                     let sock = proc.sockets.get_mut(sock_idx).ok_or(Errno::EBADF)?;
                     sock.state = SocketState::Connecting;
                     sock.host_net_handle = Some(net_handle);
-                    sock.peer_addr = ip;
-                    sock.peer_port = port;
-                    sock.connect_error = 0;
                 }
                 match host.host_net_connect_status(net_handle) {
                     Ok(()) => {
@@ -5542,23 +5527,13 @@ fn poll_check(proc: &mut Process, host: &mut dyn HostIO, fds: &mut [WasmPollFd])
                         }
                     }
                     // Host-delegated external socket (no pipe buffers).
-                    //
-                    // For `Connected` sockets we always report ready — the
-                    // kernel can't see async host state (e.g. pending fetch),
-                    // so each poll round wakes userspace which then does the
-                    // recv/send; if no data is buffered yet, host_net_recv
-                    // returns EAGAIN and the program's poll loop retries,
-                    // each iteration yielding to the JS event loop so libuv
-                    // can advance.
-                    //
-                    // For `Connecting` sockets we must NOT report ready until
-                    // the host's TCP handshake actually completes — otherwise
-                    // POLLOUT fires before the connect resolves and userspace
-                    // calls getsockopt(SO_ERROR) prematurely. Query the host
-                    // status; on success transition to Connected and report
-                    // POLLOUT/POLLIN, on failure cache the errno and report
-                    // POLLOUT|POLLERR so the userspace WATCH_CONNECT path
-                    // wakes and learns the error via SO_ERROR.
+                    // Connected: always report ready — the kernel can't see
+                    // async host state, so we wake userspace each round and
+                    // host_net_recv returns EAGAIN if no data is buffered yet.
+                    // Connecting: query host_net_connect_status; only report
+                    // POLLOUT once the TCP handshake actually completes
+                    // (success → Connected, failure → Closed + cache errno
+                    // for SO_ERROR + POLLERR).
                     if sock.host_net_handle.is_some()
                         && sock.recv_buf_idx.is_none()
                         && sock.send_buf_idx.is_none()
@@ -5586,11 +5561,7 @@ fn poll_check(proc: &mut Process, host: &mut dyn HostIO, fds: &mut [WasmPollFd])
                                             revents |= POLLIN;
                                         }
                                     }
-                                    Err(Errno::EAGAIN) => {
-                                        // still pending — do not report
-                                        // POLLOUT; the connect hasn't
-                                        // completed.
-                                    }
+                                    Err(Errno::EAGAIN) => {}
                                     Err(e) => {
                                         if let Some(s) = proc.sockets.get_mut(sock_idx) {
                                             s.state = SocketState::Closed;
@@ -5601,15 +5572,6 @@ fn poll_check(proc: &mut Process, host: &mut dyn HostIO, fds: &mut [WasmPollFd])
                                             revents |= POLLOUT;
                                         }
                                     }
-                                }
-                            }
-                            SocketState::Closed if sock.connect_error != 0 => {
-                                // Connect failed earlier; keep waking
-                                // POLLOUT|POLLERR until userspace closes the
-                                // fd. socket.c reads SO_ERROR and rejects.
-                                revents |= POLLERR;
-                                if pollfd.events & POLLOUT != 0 {
-                                    revents |= POLLOUT;
                                 }
                             }
                             _ => {}

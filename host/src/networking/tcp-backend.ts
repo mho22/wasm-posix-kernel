@@ -47,12 +47,7 @@ interface Connection {
   socket: net.Socket;
   recvBuf: Buffer;
   closed: boolean;
-  /**
-   * Set true once the underlying `net.Socket` emits `'connect'` — the TCP
-   * handshake has completed. The kernel queries this via `connectStatus`
-   * before reporting POLLOUT so userspace doesn't see a spurious `'connect'`
-   * event before the handshake actually finishes (or fails).
-   */
+  /** True once net.Socket has emitted 'connect' (TCP handshake done). */
   connected: boolean;
   error: Error | null;
 }
@@ -152,14 +147,9 @@ export class TcpNetworkBackend implements NetworkIO {
   }
 
   getaddrinfo(hostname: string): Uint8Array {
-    // Non-blocking. The kernel host runs in one thread; an Atomics.wait here
-    // would prevent libuv from dispatching the dns.lookup callback that we'd
-    // be waiting for — same intra-thread deadlock as `connect`/`recv`.
-    //
-    // Mirror the recv pattern: kick off the lookup, stash an entry, throw
-    // EagainError until it resolves. The kernel maps that to -EAGAIN, the
-    // worker retries via setTimeout, and the next iteration finds the cached
-    // result.
+    // Atomics.wait would deadlock libuv's dns.lookup callback on the kernel
+    // thread — same shape as connect/recv. Kick off async, throw EAGAIN,
+    // pick up the cached result on the worker's next retry.
     let entry = this.dns.get(hostname);
     if (!entry) {
       entry = { result: null, error: null };
