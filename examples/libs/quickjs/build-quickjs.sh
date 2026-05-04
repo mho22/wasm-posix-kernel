@@ -187,8 +187,8 @@ $CC "${CFLAGS[@]}" -c "$SRC_DIR/gen/repl.c" -o "$BIN_DIR/repl-node.o"
 NODE_OBJS+=("$BIN_DIR/repl-node.o")
 
 OPENSSL_PREFIX="$SCRIPT_DIR/../openssl/openssl-install"
-if [ ! -f "$OPENSSL_PREFIX/lib/libcrypto.a" ]; then
-    echo "ERROR: libcrypto.a not found at $OPENSSL_PREFIX/lib/. Run examples/libs/openssl/build-openssl.sh first."
+if [ ! -f "$OPENSSL_PREFIX/lib/libcrypto.a" ] || [ ! -f "$OPENSSL_PREFIX/lib/libssl.a" ]; then
+    echo "ERROR: libcrypto.a / libssl.a not found at $OPENSSL_PREFIX/lib/. Run examples/libs/openssl/build-openssl.sh first."
     exit 1
 fi
 
@@ -204,6 +204,7 @@ NODE_NATIVE_SRCS=(
     "$SCRIPT_DIR/node-compat-native/hmac.c"
     "$SCRIPT_DIR/node-compat-native/zlib.c"
     "$SCRIPT_DIR/node-compat-native/socket.c"
+    "$SCRIPT_DIR/node-compat-native/tls.c"
 )
 NODE_NATIVE_CFLAGS=(
     "${CFLAGS[@]}"
@@ -218,6 +219,7 @@ done
 
 echo "Linking node..."
 $CC "${NODE_OBJS[@]}" "${OBJS[@]}" \
+    "$OPENSSL_PREFIX/lib/libssl.a" \
     "$OPENSSL_PREFIX/lib/libcrypto.a" \
     "$ZLIB_PREFIX/lib/libz.a" \
     -lm \
