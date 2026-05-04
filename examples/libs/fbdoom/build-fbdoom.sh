@@ -98,50 +98,30 @@ ls -la "$HERE/fbdoom.wasm"
 echo "==> fbdoom.wasm built."
 
 # ── DOOM IWAD ─────────────────────────────────────────────────────────────
-# Fetch a freely-redistributable IWAD into the browser-demo asset slot.
-#
-# Freedoom Phase 1 (BSD-style licence) is a drop-in replacement for the
-# DOOM shareware IWAD that maximevince/fbDOOM accepts unmodified. We
-# pin a release tag + sha256 so the demo is reproducible.
-#
-# Skip the download if a WAD is already present — lets users substitute
-# the original shareware doom1.wad if they prefer.
+# Fetch the original DOOM shareware IWAD (v1.9, freely redistributable
+# under id Software's shareware licence) into the browser-demo asset
+# slot. Pin URL + sha256 so the demo is reproducible.
 
 WAD_DEST="$REPO_ROOT/examples/browser/public/assets/doom/doom1.wad"
-FREEDOOM_VERSION="0.13.0"
-FREEDOOM_URL="https://github.com/freedoom/freedoom/releases/download/v${FREEDOOM_VERSION}/freedoom-${FREEDOOM_VERSION}.zip"
-FREEDOOM_ZIP_SHA256="3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59"
-FREEDOOM_WAD_SHA256="7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d"
+DOOM_WAD_URL="https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad"
+DOOM_WAD_SHA256="1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771"
 
 mkdir -p "$(dirname "$WAD_DEST")"
 
 if [ -f "$WAD_DEST" ]; then
     echo "==> WAD already present at $WAD_DEST — skipping fetch."
 else
-    echo "==> Fetching Freedoom Phase 1 v${FREEDOOM_VERSION} …"
-    TMPDIR="$(mktemp -d)"
-    trap 'rm -rf "$TMPDIR"' EXIT
-    ZIP="$TMPDIR/freedoom.zip"
-    curl -fSL --retry 3 -o "$ZIP" "$FREEDOOM_URL"
-
-    # Verify the zip checksum before extracting.
-    GOT_ZIP_SHA="$(shasum -a 256 "$ZIP" | awk '{print $1}')"
-    if [ "$GOT_ZIP_SHA" != "$FREEDOOM_ZIP_SHA256" ]; then
-        echo "ERROR: freedoom-${FREEDOOM_VERSION}.zip sha256 mismatch" >&2
-        echo "  expected: $FREEDOOM_ZIP_SHA256" >&2
-        echo "  got:      $GOT_ZIP_SHA" >&2
-        exit 1
-    fi
-
-    unzip -p "$ZIP" "freedoom-${FREEDOOM_VERSION}/freedoom1.wad" > "$WAD_DEST"
+    echo "==> Fetching DOOM shareware IWAD (v1.9)…"
+    curl -fSL --retry 3 -o "$WAD_DEST" "$DOOM_WAD_URL"
 
     GOT_WAD_SHA="$(shasum -a 256 "$WAD_DEST" | awk '{print $1}')"
-    if [ "$GOT_WAD_SHA" != "$FREEDOOM_WAD_SHA256" ]; then
-        echo "ERROR: extracted freedoom1.wad sha256 mismatch" >&2
-        echo "  expected: $FREEDOOM_WAD_SHA256" >&2
+    if [ "$GOT_WAD_SHA" != "$DOOM_WAD_SHA256" ]; then
+        echo "ERROR: doom1.wad sha256 mismatch" >&2
+        echo "  expected: $DOOM_WAD_SHA256" >&2
         echo "  got:      $GOT_WAD_SHA" >&2
+        rm -f "$WAD_DEST"
         exit 1
     fi
 
-    echo "==> Freedoom1 WAD installed at $WAD_DEST ($(wc -c < "$WAD_DEST") bytes)."
+    echo "==> doom1.wad installed at $WAD_DEST ($(wc -c < "$WAD_DEST") bytes)."
 fi

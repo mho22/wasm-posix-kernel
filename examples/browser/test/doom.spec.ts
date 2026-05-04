@@ -9,7 +9,7 @@
  * this failure mode and went unnoticed.
  *
  * Marked @slow because it boots the full fbdoom wasm + paints the
- * 28 MB Freedoom IWAD into VFS — both required.
+ * ~4 MB DOOM shareware IWAD into VFS — both required.
  */
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
