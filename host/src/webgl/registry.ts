@@ -90,15 +90,23 @@ export class GlContextRegistry {
   /** Channels installed before `bind()` fires; drained when it does, so
    *  the embedder can wire forwarding without racing `host_gl_bind`. */
   private pendingForwards = new Map<number, GlForwardChannel>();
+  /** Canvases attached before `bind()` fires; drained on bind, mirroring
+   *  pendingForwards. Without this, an embedder that calls
+   *  `attachCanvas(pid, …)` synchronously after `spawn()` would race
+   *  the program's own `eglInitialize → host_gl_bind` and silently
+   *  drop the canvas, leaving every subsequent submit a no-op. */
+  private pendingCanvases = new Map<number, HTMLCanvasElement | OffscreenCanvas>();
 
   bind(b: GlBindingInput): void {
     const forward = this.pendingForwards.get(b.pid) ?? null;
     this.pendingForwards.delete(b.pid);
+    const canvas = this.pendingCanvases.get(b.pid) ?? null;
+    this.pendingCanvases.delete(b.pid);
     this.bindings.set(b.pid, {
       ...b,
       cmdbufView: null,
       gl: null,
-      canvas: null,
+      canvas,
       contextId: null,
       surfaceId: null,
       buffers: new Map(),
@@ -144,17 +152,25 @@ export class GlContextRegistry {
   /**
    * Wire a canvas to this binding. Must happen before the program
    * calls `eglCreateContext` (which triggers `host_gl_create_context`).
-   * The WebGL2 context itself is built lazily at create-context time.
+   * Embedders that haven't seen `host_gl_bind` yet (e.g. attaching
+   * synchronously after `spawn()`) are queued in `pendingCanvases`
+   * and drained when bind arrives. The WebGL2 context itself is
+   * built lazily at create-context time.
    */
   attachCanvas(
     pid: number,
     canvas: HTMLCanvasElement | OffscreenCanvas,
   ): void {
     const b = this.bindings.get(pid);
-    if (b) b.canvas = canvas;
+    if (b) {
+      b.canvas = canvas;
+      return;
+    }
+    this.pendingCanvases.set(pid, canvas);
   }
 
   detachCanvas(pid: number): void {
+    this.pendingCanvases.delete(pid);
     const b = this.bindings.get(pid);
     if (b) {
       b.canvas = null;

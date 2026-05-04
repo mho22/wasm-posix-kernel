@@ -65,6 +65,21 @@ EGLBoolean eglInitialize(EGLDisplay dpy, EGLint *major, EGLint *minor) {
         return EGL_FALSE;
     }
 
+    // Map the cmdbuf here, not in eglMakeCurrent, so the host's
+    // gl_bind fires before any subsequent GLIO_CREATE_CONTEXT. The
+    // host registry's pendingCanvases drain runs on bind, and
+    // gl_create_context relies on `b.canvas` being set — without an
+    // early bind the context is built with no canvas attached and
+    // the OffscreenCanvas placeholder stays blank.
+    void *p = mmap(NULL, WPK_GL_CMDBUF_LEN, PROT_READ | PROT_WRITE,
+                   MAP_SHARED, fd, 0);
+    if (p == MAP_FAILED) {
+        close(fd);
+        g_last_error = EGL_NOT_INITIALIZED;
+        return EGL_FALSE;
+    }
+    g_cmdbuf_base = (uint8_t *)p;
+
     g_fd = fd;
     g_initialized = 1;
     if (major) *major = 1;
@@ -169,16 +184,8 @@ EGLBoolean eglMakeCurrent(EGLDisplay dpy, EGLSurface draw,
         g_last_error = EGL_BAD_ACCESS;
         return EGL_FALSE;
     }
-
-    if (g_cmdbuf_base == NULL) {
-        void *p = mmap(NULL, WPK_GL_CMDBUF_LEN, PROT_READ | PROT_WRITE,
-                       MAP_SHARED, g_fd, 0);
-        if (p == MAP_FAILED) {
-            g_last_error = EGL_BAD_ALLOC;
-            return EGL_FALSE;
-        }
-        g_cmdbuf_base = (uint8_t *)p;
-    }
+    // The cmdbuf was mmap'd in eglInitialize so the host's gl_bind
+    // fires before GLIO_CREATE_CONTEXT — see the rationale there.
     return EGL_TRUE;
 }
 

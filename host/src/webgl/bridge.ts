@@ -241,9 +241,13 @@ function dispatch(
     case O.OP_SHADER_SOURCE: {
       const name = v.getUint32(p, true);
       const srcLen = v.getUint32(p + 4, true);
-      const src = new TextDecoder().decode(
-        new Uint8Array(v.buffer, v.byteOffset + p + 8, srcLen),
-      );
+      // TextDecoder rejects views over SharedArrayBuffer, which the
+      // cmdbuf is when the user program runs against shared memory
+      // (the wasm-posix-kernel default). Copy into a fresh
+      // Uint8Array — also detaches from SAB grow races.
+      const srcBytes = new Uint8Array(srcLen);
+      srcBytes.set(new Uint8Array(v.buffer, v.byteOffset + p + 8, srcLen));
+      const src = new TextDecoder().decode(srcBytes);
       const sh = b.shaders.get(name);
       if (sh) gl.shaderSource(sh, src);
       return;
@@ -288,9 +292,11 @@ function dispatch(
       const prog = b.programs.get(v.getUint32(p, true));
       const index = v.getUint32(p + 4, true);
       const nameLen = v.getUint32(p + 8, true);
-      const name = new TextDecoder().decode(
-        new Uint8Array(v.buffer, v.byteOffset + p + 12, nameLen),
-      );
+      // Copy off the (possibly shared) cmdbuf — TextDecoder rejects
+      // views over SharedArrayBuffer.
+      const nameBytes = new Uint8Array(nameLen);
+      nameBytes.set(new Uint8Array(v.buffer, v.byteOffset + p + 12, nameLen));
+      const name = new TextDecoder().decode(nameBytes);
       if (prog) gl.bindAttribLocation(prog, index, name);
       return;
     }
