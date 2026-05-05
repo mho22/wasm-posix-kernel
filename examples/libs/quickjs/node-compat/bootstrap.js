@@ -841,6 +841,11 @@ function _createWriteStream(fd) {
         once() { return s; },
         emit() { return false; },
         removeListener() { return s; },
+        // tty.WriteStream cursor/line no-ops. npm's progress spinner calls
+        // cursorTo(0) and clearLine(1) unconditionally even when the fd
+        // isn't a tty.
+        cursorTo() { return true; },
+        clearLine() { return true; },
         isTTY: os.isatty(fd),
         columns: 80,
         rows: 24,
@@ -1553,8 +1558,14 @@ const util = (() => {
         isUint8Array(v) { return v instanceof Uint8Array; },
     };
 
+    // Node's util.formatWithOptions(opts, ...args). Our inspect() ignores
+    // the options bag (no color/depth knobs yet) so this is just format()
+    // with the leading options dropped — npm's lib/utils/format.js is the
+    // primary caller.
+    function formatWithOptions(_opts, ...args) { return format(...args); }
+
     return {
-        format, inspect, inherits, deprecate, promisify, callbackify,
+        format, formatWithOptions, inspect, inherits, deprecate, promisify, callbackify,
         isDeepStrictEqual, types,
         TextDecoder, TextEncoder,
         // Deprecated but widely used
@@ -1989,19 +2000,31 @@ const string_decoder = (() => {
 // ============================================================
 
 const timers = (() => {
-    // QuickJS has os.setTimeout
+    // js_std_add_helpers installs setTimeout/setInterval that return a raw
+    // int64 timer id. Node returns an object with .unref(); npm's Display
+    // calls .unref() on its spinner timeout, so wrap the id in an object.
+    // clearAny() unwraps _id when the wrapper is passed back to clear*().
+    const wrap = (id) => ({ _id: id, unref() { return this; } });
+    const clearAny = (t) => {
+        if (t == null) return;
+        os.clearTimeout(typeof t === 'object' ? t._id : t);
+    };
     return {
-        setTimeout: globalThis.setTimeout || ((fn, ms, ...args) => os.setTimeout(() => fn(...args), ms || 0)),
-        clearTimeout: globalThis.clearTimeout || os.clearTimeout,
-        setInterval: globalThis.setInterval || ((fn, ms, ...args) => {
-            let id;
-            const repeat = () => { fn(...args); id = os.setTimeout(repeat, ms || 0); };
-            id = os.setTimeout(repeat, ms || 0);
-            return id;
-        }),
-        clearInterval: globalThis.clearInterval || os.clearTimeout,
-        setImmediate: globalThis.setImmediate || ((fn, ...args) => os.setTimeout(() => fn(...args), 0)),
-        clearImmediate: globalThis.clearImmediate || os.clearTimeout,
+        setTimeout: (fn, ms, ...args) =>
+            wrap(os.setTimeout(() => fn(...args), ms || 0)),
+        clearTimeout: clearAny,
+        setInterval: (fn, ms, ...args) => {
+            // _id is rewritten on every tick so the latest live id is what
+            // clearInterval cancels.
+            const t = wrap(0);
+            const tick = () => { fn(...args); t._id = os.setTimeout(tick, ms || 0); };
+            t._id = os.setTimeout(tick, ms || 0);
+            return t;
+        },
+        clearInterval: clearAny,
+        setImmediate: (fn, ...args) =>
+            wrap(os.setTimeout(() => fn(...args), 0)),
+        clearImmediate: clearAny,
     };
 })();
 
@@ -3166,6 +3189,11 @@ const Module = {
 };
 _builtinModules['module'] = Module;
 
+// `require('process')` and `import 'node:process'` both return the same
+// global. Node ships this as a real builtin module; npm's chalk dependency
+// (via its vendored supports-color) does `import process from 'node:process'`.
+_builtinModules['process'] = process;
+
 // Mode bits for stat(): S_IFDIR / S_IFREG match os.stat() return mode field.
 function _isDir(p) {
     const [st, err] = os.stat(p);
@@ -3289,10 +3317,18 @@ function _makeRequire(filename) {
         };
         _moduleCache[resolved] = mod;
 
-        // Wrap and execute
+        // Wrap and execute. Compile via evalScriptAsFunction (not `new Function`)
+        // so the wrapped script's [[ScriptOrModule]] carries `resolved` — that's
+        // what JS_GetScriptOrModuleName returns to the C-side module normalizer
+        // when this body calls dynamic `import()`. Without it, bare specifiers
+        // (`import('chalk')`) can't tell which node_modules tree to walk.
         const dirname = path.dirname(resolved);
-        const wrappedFn = new Function('exports', 'require', 'module', '__filename', '__dirname',
-            source + '\n//# sourceURL=' + resolved);
+        const wrappedFn = _nodeNative.evalScriptAsFunction(
+            '(function (exports, require, module, __filename, __dirname) {\n' +
+                source +
+                '\n})',
+            resolved
+        );
 
         const childRequire = _makeRequire(resolved);
         try {
@@ -3350,13 +3386,14 @@ globalThis.Buffer = Buffer;
 globalThis.global = globalThis;
 globalThis.GLOBAL = globalThis; // deprecated alias
 
-// Timer globals
-globalThis.setTimeout = globalThis.setTimeout || timers.setTimeout;
-globalThis.clearTimeout = globalThis.clearTimeout || timers.clearTimeout;
-globalThis.setInterval = globalThis.setInterval || timers.setInterval;
-globalThis.clearInterval = globalThis.clearInterval || timers.clearInterval;
-globalThis.setImmediate = globalThis.setImmediate || timers.setImmediate;
-globalThis.clearImmediate = globalThis.clearImmediate || timers.clearImmediate;
+// Timer globals — overwrite the js_std_add_helpers stubs that return a
+// raw int64 with the wrapped-id objects from `timers` above.
+globalThis.setTimeout = timers.setTimeout;
+globalThis.clearTimeout = timers.clearTimeout;
+globalThis.setInterval = timers.setInterval;
+globalThis.clearInterval = timers.clearInterval;
+globalThis.setImmediate = timers.setImmediate;
+globalThis.clearImmediate = timers.clearImmediate;
 
 // __dirname and __filename for the main module (set when running a file)
 globalThis.__filename = '';
