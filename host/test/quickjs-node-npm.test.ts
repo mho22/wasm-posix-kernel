@@ -11,17 +11,15 @@ const NPM_CLI = join(NPM_DIST, "bin/npm-cli.js");
 const HAS_NODE = existsSync(NODE);
 const HAS_NPM = existsSync(NPM_CLI);
 
-/* These tests exercise the bootstrap.js changes that make npm 10.9.2 loadable
-   under our QuickJS Node-compat layer. They cover the require subsystem
-   (script-relative basedir, console.error/warn shims, package.json#main
-   resolution, shared module cache, fs/promises builtin) and the events
-   module export shape (must be the EventEmitter class itself so userland
-   code like npm's Timers — `class T extends require('events')` — actually
-   reaches its own prototype methods).
-
-   Full `npm --version` end-to-end still requires dynamic-import resolution
-   for bare specifiers (chalk, supports-color), which is a separate change
-   in QuickJS's C-side module loader — tracked as the next Phase 5 task. */
+/* These tests exercise the bootstrap.js + node-main.c changes that make
+   npm 10.9.2 boot under our QuickJS Node-compat layer. They cover the
+   CommonJS require subsystem (script-relative basedir, console.error/warn
+   shims, package.json#main resolution, shared module cache, fs/promises
+   builtin), the events module export shape (must be the EventEmitter class
+   itself so `class T extends require('events')` reaches its own prototype),
+   and the C-side ESM module normalizer that resolves bare specifiers
+   (`import('chalk')`), `#imports` subpaths, and `node:` builtins for
+   dynamic import() inside CJS modules. */
 describe.skipIf(!HAS_NODE || !HAS_NPM)("npm 10.9.2 bootstrap (Phase 5)", () => {
   it("require('events') is the EventEmitter class — `class T extends require('events')` reaches derived methods", { timeout: 15_000 }, async () => {
     const src = `
@@ -145,28 +143,13 @@ describe.skipIf(!HAS_NODE || !HAS_NPM)("npm 10.9.2 bootstrap (Phase 5)", () => {
     expect(JSON.parse(r.stdout.trim())).toEqual({ ctor: "function" });
   });
 
-  it("npm's Npm class instantiates and exposes finish() (proves the events-class fix)", { timeout: 15_000 }, async () => {
-    // Pre-fix: events module exported `function() { return new EE() }` instead
-    // of the EventEmitter class. npm's Timers (`class Timers extends EE`) had
-    // its super() call return a fresh EE instance, leaving Timers's own
-    // methods (finish, load, on, off) on an unreachable prototype. npm.finish()
-    // crashed with "TypeError: not a function" before any output could print.
-    const src = `
-      process.argv = ['node', '${NPM_CLI}', '--version'];
-      const Npm = require('${NPM_DIST}/lib/npm.js');
-      const npm = new Npm();
-      // Construct path goes through "class Timers extends require('node:events')".
-      // We don't call npm.load() (still gated on dynamic-import resolution for
-      // chalk) but we can prove Timers.finish() is reachable by calling npm.finish().
-      npm.finish(null);
-      console.log('finish-ok');
-    `;
+  it("`node ${NPM_CLI} --version` prints 10.9.2 (full e2e)", { timeout: 30_000 }, async () => {
     const r = await runCentralizedProgram({
       programPath: NODE,
-      argv: ["node", "-e", src],
-      timeout: 15_000,
+      argv: ["node", NPM_CLI, "--version"],
+      timeout: 30_000,
     });
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toContain("finish-ok");
+    expect(r.stdout.trim()).toBe("10.9.2");
   });
 });
