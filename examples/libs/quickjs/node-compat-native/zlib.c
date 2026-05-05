@@ -3,6 +3,7 @@
 
 #include <zlib.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define ZLIB_MODE_DEFLATE 0
 #define ZLIB_MODE_INFLATE 1
@@ -10,7 +11,6 @@
 #define ZLIB_WBITS_ZLIB   (15)
 #define ZLIB_WBITS_GZIP   (31)
 
-#define ZLIB_OUT_MIN_CAP  4096
 #define ZLIB_OUT_HEADROOM 256
 
 static JSClassID zlib_class_id;
@@ -80,31 +80,39 @@ static JSValue zlib_run(JSContext *ctx, JSNodeZlib *z,
     z->zs.next_in = (Bytef *)input;
     z->zs.avail_in = (uInt)input_len;
 
-    size_t out_cap = input_len * 2 + ZLIB_OUT_MIN_CAP;
-    uint8_t *out = malloc(out_cap);
-    if (!out) return JS_ThrowOutOfMemory(ctx);
-    size_t out_used = 0;
+    /* Chunks list, not a realloc'd single buffer: in our wasm zlib + musl
+     * realloc combination, growing the user output buffer mid-stream zero'd
+     * the already-emitted prefix. */
+    enum { CHUNK = 64 * 1024 };
+    typedef struct chunk_s { struct chunk_s *next; size_t used; uint8_t data[CHUNK]; } chunk_t;
+    chunk_t *head = NULL, *tail = NULL;
+    size_t total = 0;
     int flush = final ? Z_FINISH : Z_NO_FLUSH;
 
+    #define APPEND_CHUNK() do { \
+        chunk_t *c = malloc(sizeof(chunk_t)); \
+        if (!c) goto oom; \
+        c->next = NULL; c->used = 0; \
+        if (tail) tail->next = c; else head = c; \
+        tail = c; \
+    } while (0)
+
+    APPEND_CHUNK();
+
     for (;;) {
-        if (out_cap - out_used < ZLIB_OUT_HEADROOM) {
-            size_t new_cap = out_cap * 2;
-            uint8_t *new_out = realloc(out, new_cap);
-            if (!new_out) {
-                free(out);
-                return JS_ThrowOutOfMemory(ctx);
-            }
-            out = new_out;
-            out_cap = new_cap;
+        if (CHUNK - tail->used < ZLIB_OUT_HEADROOM) {
+            APPEND_CHUNK();
         }
-        z->zs.next_out = out + out_used;
-        z->zs.avail_out = (uInt)(out_cap - out_used);
+        z->zs.next_out = tail->data + tail->used;
+        z->zs.avail_out = (uInt)(CHUNK - tail->used);
 
         int rc = (z->mode == ZLIB_MODE_DEFLATE)
             ? deflate(&z->zs, flush)
             : inflate(&z->zs, flush);
 
-        out_used = (uint8_t *)z->zs.next_out - out;
+        size_t produced = (uint8_t *)z->zs.next_out - (tail->data + tail->used);
+        tail->used += produced;
+        total += produced;
 
         if (rc == Z_STREAM_END) break;
         if (rc == Z_BUF_ERROR) {
@@ -112,16 +120,29 @@ static JSValue zlib_run(JSContext *ctx, JSNodeZlib *z,
             continue;
         }
         if (rc != Z_OK) {
-            free(out);
+            for (chunk_t *c = head; c; ) { chunk_t *n = c->next; free(c); c = n; }
             return JS_ThrowInternalError(ctx, "zlib: %s",
                                          z->zs.msg ? z->zs.msg : "error");
         }
         if (!final && z->zs.avail_in == 0) break;
     }
 
-    JSValue result = JS_NewUint8ArrayCopy(ctx, out, out_used);
+    uint8_t *out = malloc(total ? total : 1);
+    if (!out) goto oom;
+    size_t off = 0;
+    for (chunk_t *c = head; c; c = c->next) {
+        memcpy(out + off, c->data, c->used);
+        off += c->used;
+    }
+    for (chunk_t *c = head; c; ) { chunk_t *n = c->next; free(c); c = n; }
+
+    JSValue result = JS_NewUint8ArrayCopy(ctx, out, total);
     free(out);
     return result;
+
+oom:
+    for (chunk_t *c = head; c; ) { chunk_t *n = c->next; free(c); c = n; }
+    return JS_ThrowOutOfMemory(ctx);
 }
 
 static uint8_t *get_input_buffer(JSContext *ctx, JSValueConst v, size_t *len_out)

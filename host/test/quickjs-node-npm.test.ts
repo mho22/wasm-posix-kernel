@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCentralizedProgram } from "./centralized-test-helper";
@@ -151,5 +152,37 @@ describe.skipIf(!HAS_NODE || !HAS_NPM)("npm 10.9.2 bootstrap (Phase 5)", () => {
     });
     expect(r.exitCode).toBe(0);
     expect(r.stdout.trim()).toBe("10.9.2");
+  });
+
+  it("`npm install lodash` adds node_modules/lodash with version 4.x", { timeout: 240_000 }, async () => {
+    const prefix = mkdtempSync(join(tmpdir(), "npm-install-"));
+    const cache = mkdtempSync(join(tmpdir(), "npm-install-cache-"));
+    writeFileSync(join(prefix, "package.json"), JSON.stringify({ name: "t", version: "0.0.1" }));
+    try {
+      const r = await runCentralizedProgram({
+        programPath: NODE,
+        argv: [
+          "node",
+          NPM_CLI,
+          "install",
+          "lodash",
+          "--prefix", prefix,
+          "--cache", cache,
+          "--no-fund",
+          "--no-audit",
+          "--no-progress",
+        ],
+        env: [`HOME=${prefix}`, "PATH=/usr/bin:/bin"],
+        enableTcpNetwork: true,
+        timeout: 240_000,
+      });
+      expect(r.exitCode).toBe(0);
+      const pkg = JSON.parse(readFileSync(join(prefix, "node_modules/lodash/package.json"), "utf8"));
+      expect(pkg.name).toBe("lodash");
+      expect(pkg.version).toMatch(/^4\./);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      rmSync(cache, { recursive: true, force: true });
+    }
   });
 });
