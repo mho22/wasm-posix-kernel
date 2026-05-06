@@ -219,6 +219,10 @@ export class TlsNetworkBackend implements NetworkIO {
     }
   }
 
+  connectStatus(handle: number): number {
+    return this.connections.has(handle) ? 0 : 107; // 107 = ENOTCONN
+  }
+
   send(handle: number, data: Uint8Array, _flags: number): number {
     const conn = this.connections.get(handle);
     if (!conn) throw new Error("ENOTCONN");

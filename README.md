@@ -156,7 +156,7 @@ npm install
 npx vite --port 5198
 ```
 
-Open `http://localhost:5198` to try 12 interactive demos — C programs, interactive shell, Python/Perl/Ruby REPLs, nginx, MariaDB, Redis, full WordPress, and a LAMP stack — all running in the browser.
+Open `http://localhost:5198` to try 13 interactive demos — C programs, interactive shell, Python/Perl/Ruby/Node REPLs (including in-browser `npm install`), nginx, MariaDB, Redis, full WordPress, and a LAMP stack — all running in the browser.
 
 Browser demos use pre-built **VFS images** — binary filesystem snapshots that load instantly at runtime. See [docs/browser-support.md](docs/browser-support.md#vfs-images) for details.
 

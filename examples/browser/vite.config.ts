@@ -253,6 +253,7 @@ export default defineConfig({
         python: path.resolve(__dirname, "pages/python/index.html"),
         perl: path.resolve(__dirname, "pages/perl/index.html"),
         ruby: path.resolve(__dirname, "pages/ruby/index.html"),
+        node: path.resolve(__dirname, "pages/node/index.html"),
         "test-runner": path.resolve(__dirname, "pages/test-runner/index.html"),
         "git-test": path.resolve(__dirname, "pages/git-test/index.html"),
         "mariadb-test": path.resolve(__dirname, "pages/mariadb-test/index.html"),
