@@ -51,6 +51,15 @@ if (typeof globalThis.TextEncoder === 'undefined') {
 }
 
 if (typeof globalThis.TextDecoder === 'undefined') {
+    // Build the result by batching codepoints into 8K chunks and joining via
+    // String.fromCharCode.apply. The naive `result += String.fromCharCode(c)`
+    // loop produces a per-character string rope; JS_ToCStringLen (invoked
+    // when C reads the string, e.g. native JSON.parse on a 38 MB npm
+    // packument) must linearize that rope into a flat UTF-16 buffer and
+    // SIGABRTs from heap fragmentation on multi-MB inputs.
+    // Array.prototype.join('') is unsafe — QJS-NG zeros leading parts when
+    // joining many large 8-bit strings.
+    const _CHUNK = 8192;
     globalThis.TextDecoder = class TextDecoder {
         constructor(encoding) {
             this._encoding = (encoding || 'utf-8').toLowerCase();
@@ -62,6 +71,7 @@ if (typeof globalThis.TextDecoder === 'undefined') {
                           input instanceof ArrayBuffer ? new Uint8Array(input) :
                           new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
             let result = '';
+            let chunk = [];
             let i = 0;
             while (i < bytes.length) {
                 let code;
@@ -80,13 +90,31 @@ if (typeof globalThis.TextDecoder === 'undefined') {
                 }
                 if (code > 0xFFFF) {
                     code -= 0x10000;
-                    result += String.fromCharCode(0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF));
+                    chunk.push(0xD800 + (code >> 10), 0xDC00 + (code & 0x3FF));
                 } else {
-                    result += String.fromCharCode(code);
+                    chunk.push(code);
+                }
+                if (chunk.length >= _CHUNK) {
+                    result += String.fromCharCode.apply(null, chunk);
+                    chunk = [];
                 }
             }
+            if (chunk.length > 0) result += String.fromCharCode.apply(null, chunk);
             return result;
         }
+    };
+}
+
+// QuickJS-NG's JSON.parse is quadratic on multi-MB inputs (a 38 MB npm
+// packument takes 9+ hours). Use yyjson when input is a plain string with no
+// reviver; fall back to the original parser otherwise.
+if (typeof _nodeNative.jsonParse === 'function') {
+    const _origJsonParse = JSON.parse;
+    JSON.parse = function(text, reviver) {
+        if (reviver !== undefined || typeof text !== 'string') {
+            return _origJsonParse.call(JSON, text, reviver);
+        }
+        return _nodeNative.jsonParse(text);
     };
 }
 
@@ -1928,21 +1956,24 @@ const url = (() => {
         }
 
         if (result.slashes) {
-            // Auth
-            const atIdx = rest.indexOf('@');
-            if (atIdx !== -1) {
-                result.auth = rest.slice(0, atIdx);
-                rest = rest.slice(atIdx + 1);
-            }
-            // Host
+            // Split authority from pathname before scanning for '@' so that
+            // a registry URL like `https://reg.example.org/@scope/foo` does
+            // not treat the path's '@' as a userinfo delimiter.
             const slashIdx = rest.indexOf('/');
+            let authority;
             if (slashIdx !== -1) {
-                result.host = rest.slice(0, slashIdx);
+                authority = rest.slice(0, slashIdx);
                 result.pathname = rest.slice(slashIdx);
             } else {
-                result.host = rest;
+                authority = rest;
                 result.pathname = '/';
             }
+            const atIdx = authority.lastIndexOf('@');
+            if (atIdx !== -1) {
+                result.auth = authority.slice(0, atIdx);
+                authority = authority.slice(atIdx + 1);
+            }
+            result.host = authority;
             // Port
             const colonIdx = result.host.lastIndexOf(':');
             if (colonIdx !== -1) {

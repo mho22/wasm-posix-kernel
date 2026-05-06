@@ -6,6 +6,7 @@
 #include "zlib.h"
 #include "socket.h"
 #include "tls.h"
+#include "json.h"
 
 /* evalScriptAsFunction(source, filename) — JS_Eval with caller-supplied
    filename. Used by the bootstrap's CommonJS require() so wrapped module
@@ -54,6 +55,7 @@ static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("tlsRead", 2, js_node_native_tls_read),
     JS_CFUNC_DEF("tlsWrite", 2, js_node_native_tls_write),
     JS_CFUNC_DEF("tlsClose", 1, js_node_native_tls_close),
+    JS_CFUNC_DEF("jsonParse", 1, js_node_native_json_parse),
 };
 
 static int node_native_module_init(JSContext *ctx, JSModuleDef *m)
