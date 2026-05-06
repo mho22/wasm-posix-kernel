@@ -11,7 +11,6 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#include <time.h>
 #include <sys/stat.h>
 
 #include "cutils.h"
@@ -35,7 +34,8 @@ static char **node__argv;
 
 /* Node-flavoured event loop. Wraps js_std_loop_once() so we can drive the
    socket fd-watch table on every iteration. Exit when no JS jobs, no
-   timers, and no pending socket watches remain. */
+   timers, no pending socket watches, and no os.setReadHandler watches
+   (the REPL keeps itself alive solely via the latter). */
 static int js_node_loop(JSContext *ctx)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -47,7 +47,8 @@ static int js_node_loop(JSContext *ctx)
         int dispatched = js_node_socket_dispatch(ctx);
         dispatched += js_node_tls_dispatch(ctx);
         int has_watches = js_node_socket_has_watches() ||
-                          js_node_tls_has_watches();
+                          js_node_tls_has_watches() ||
+                          js_std_has_io_handlers(ctx);
         int jobs_pending = JS_IsJobPending(rt);
 
         if (!has_watches && !jobs_pending && delay == -1) {
@@ -63,11 +64,11 @@ static int js_node_loop(JSContext *ctx)
             sleep_ms = delay;
         }
         if (sleep_ms <= 0) continue;
-        struct timespec ts = {
-            .tv_sec  = sleep_ms / 1000,
-            .tv_nsec = (sleep_ms % 1000) * 1000000L,
-        };
-        nanosleep(&ts, NULL);
+
+        /* Poll the os.setReadHandler/setWriteHandler fds and dispatch any
+           handler that fires. With an empty rw list this is just a sleep. */
+        int poll_ret = js_std_poll_io(ctx, sleep_ms);
+        if (poll_ret == -2) return -1; /* JS error in handler */
     }
 }
 
