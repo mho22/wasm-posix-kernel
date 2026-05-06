@@ -35,6 +35,21 @@ static JSValue js_node_native_eval_script_as_function(JSContext *ctx,
     return ret;
 }
 
+/* decodeUtf8(u8) — UTF-8 bytes to JS string in one pass. The TextDecoder
+   polyfill walks bytes in JS and joins 8 K codepoint chunks; on a 38 MB
+   npm packument that's ~10 s. JS_NewStringLen takes UTF-8 directly. */
+static JSValue js_node_native_decode_utf8(JSContext *ctx,
+                                          JSValueConst this_val,
+                                          int argc, JSValueConst *argv)
+{
+    size_t len;
+    uint8_t *buf = JS_GetUint8Array(ctx, &len, argv[0]);
+    if (!buf)
+        return JS_ThrowTypeError(ctx,
+            "decodeUtf8: arg must be Uint8Array/Buffer");
+    return JS_NewStringLen(ctx, (const char *)buf, len);
+}
+
 static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("evalScriptAsFunction", 2, js_node_native_eval_script_as_function),
     JS_CFUNC_DEF("createHash", 1, js_node_native_create_hash),
@@ -56,6 +71,7 @@ static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("tlsWrite", 2, js_node_native_tls_write),
     JS_CFUNC_DEF("tlsClose", 1, js_node_native_tls_close),
     JS_CFUNC_DEF("jsonParse", 1, js_node_native_json_parse),
+    JS_CFUNC_DEF("decodeUtf8", 1, js_node_native_decode_utf8),
 };
 
 static int node_native_module_init(JSContext *ctx, JSModuleDef *m)

@@ -70,6 +70,11 @@ if (typeof globalThis.TextDecoder === 'undefined') {
             const bytes = input instanceof Uint8Array ? input :
                           input instanceof ArrayBuffer ? new Uint8Array(input) :
                           new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+            // Native UTF-8 → JS string in one pass. The JS fallback below
+            // does the same but takes ~10 s on a 38 MB npm packument.
+            if (typeof _nodeNative.decodeUtf8 === 'function') {
+                return _nodeNative.decodeUtf8(bytes);
+            }
             let result = '';
             let chunk = [];
             let i = 0;
@@ -2654,7 +2659,7 @@ const HTTP_METHODS = [
    the socket arrive via feed() and trigger onHeaders / message.push().
    The parser owns the IncomingMessage and is the only thing that should
    call message.push(). */
-function makeResponseParser({ onHeaders, onError }) {
+function makeResponseParser({ onHeaders, onError, onComplete }) {
     let state = 'STATUS'; // STATUS | HEADERS | BODY
     let textBuf = '';     // latin1 buffer for status/headers
     let message = null;
@@ -2665,6 +2670,7 @@ function makeResponseParser({ onHeaders, onError }) {
     let chunkAcc = '';
     let trailerAcc = '';
     let completed = false;
+    let remainder = null; // bytes received after end-of-message, for the next claimer of this socket
 
     function bytesToLatin1(u8) {
         let s = '';
@@ -2677,11 +2683,13 @@ function makeResponseParser({ onHeaders, onError }) {
         return u8;
     }
 
-    function complete() {
+    function complete(leftover) {
         if (completed) return;
         completed = true;
+        if (leftover && leftover.length > 0) remainder = leftover;
         if (message) message.complete = true;
         if (message) message.push(null);
+        if (onComplete) onComplete();
     }
 
     function setupBodyMode() {
@@ -2781,12 +2789,8 @@ function makeResponseParser({ onHeaders, onError }) {
                 // Either "\r\n" (no trailers) or trailer headers ending in "\r\n\r\n".
                 while (i < u8.length) {
                     chunkAcc += String.fromCharCode(u8[i++]);
-                    if (chunkAcc === '\r\n') {
-                        complete();
-                        return;
-                    }
-                    if (chunkAcc.endsWith('\r\n\r\n')) {
-                        complete();
+                    if (chunkAcc === '\r\n' || chunkAcc.endsWith('\r\n\r\n')) {
+                        complete(i < u8.length ? u8.subarray(i) : null);
                         return;
                     }
                     if (chunkAcc.length > 65536) {
@@ -2809,7 +2813,9 @@ function makeResponseParser({ onHeaders, onError }) {
                 message.push(Buffer.from(u8.subarray(0, n)));
                 bodyRemaining -= n;
             }
-            if (bodyRemaining === 0) complete();
+            if (bodyRemaining === 0) {
+                complete(u8.length > n ? u8.subarray(n) : null);
+            }
         } else if (bodyMode === 'close') {
             if (u8.length > 0) message.push(Buffer.from(u8));
         } else if (bodyMode === 'chunked') {
@@ -2820,6 +2826,7 @@ function makeResponseParser({ onHeaders, onError }) {
     return {
         get message() { return message; },
         get completed() { return completed; },
+        getRemainder() { return remainder; },
         feed(u8) {
             try {
                 if (state === 'STATUS' || state === 'HEADERS') {
@@ -2840,10 +2847,14 @@ function makeResponseParser({ onHeaders, onError }) {
                                 onHeaders(message);
                                 // Bodyless responses (no-body status, or
                                 // Content-Length: 0) complete immediately —
-                                // no further bytes needed.
+                                // no further bytes needed. Hand any post-header
+                                // bytes to the next claimer of the socket.
                                 if (bodyMode === 'none'
                                     || (bodyMode === 'length' && bodyRemaining === 0)) {
-                                    complete();
+                                    const left = textBuf.length > 0
+                                        ? latin1ToBytes(textBuf) : null;
+                                    textBuf = '';
+                                    complete(left);
                                     return;
                                 }
                                 if (textBuf.length > 0) {
@@ -2895,6 +2906,49 @@ function makeIncomingMessage() {
 
 function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
     const protoLower = defaultProtocol.toLowerCase();
+
+    // Per-origin keep-alive socket pool. Sequential npm fetches against the
+    // same registry reuse one TLS connection instead of paying ~28 fresh
+    // handshakes during `npm install vite`.
+    const pool = new Map(); // "host:port" -> [sock, ...]
+    function poolKey(host, port) { return host + ':' + port; }
+    const MAX_POOL_PER_ORIGIN = 4;
+    // After this many ms idle, destroy the socket. node-main.c's js_node_loop
+    // exits only when there are no socket/tls watches; pooled sockets keep a
+    // `nat.tlsRead` outstanding which counts as a watch and would block exit.
+    const POOL_IDLE_MS = 500;
+    function popLiveFromPool(key) {
+        const bucket = pool.get(key);
+        while (bucket && bucket.length) {
+            const sock = bucket.pop();
+            if (sock._poolTimer) { clearTimeout(sock._poolTimer); sock._poolTimer = null; }
+            const idle = sock._idleHandler;
+            sock.removeListener('close', idle);
+            sock.removeListener('end', idle);
+            sock.removeListener('error', idle);
+            sock._idleHandler = null;
+            if (!sock._idleDead) return sock;
+        }
+        return null;
+    }
+    function returnToPool(key, sock) {
+        let bucket = pool.get(key);
+        if (!bucket) { bucket = []; pool.set(key, bucket); }
+        if (bucket.length >= MAX_POOL_PER_ORIGIN) {
+            try { sock.destroy(); } catch (_) { /* ignore */ }
+            return;
+        }
+        const onIdle = () => { sock._idleDead = true; };
+        sock._idleHandler = onIdle;
+        sock.once('close', onIdle);
+        sock.once('end', onIdle);
+        sock.once('error', onIdle);
+        sock._poolTimer = setTimeout(() => {
+            sock._poolTimer = null;
+            try { sock.destroy(); } catch (_) { /* ignore */ }
+        }, POOL_IDLE_MS);
+        bucket.push(sock);
+    }
 
     /* Normalize every supported `request()` argument shape into a flat
        options object. Accepts: URL string, WHATWG URL, Node-style
@@ -2952,7 +3006,7 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
                 this.setHeader('Host', this._host + portStr);
             }
             if (!this.getHeader('connection')) {
-                this.setHeader('Connection', 'close');
+                this.setHeader('Connection', 'keep-alive');
             }
             // Pass-through TLS options for redirected calls and the initial connect.
             this._tlsOpts = {
@@ -3000,40 +3054,126 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
             delete this._headerValues[lk];
         }
 
-        _openSocket() {
-            const sock = connect({
-                host: this._host,
-                port: this._port,
-                ca: this._tlsOpts.ca,
-                rejectUnauthorized: this._tlsOpts.rejectUnauthorized,
-                servername: this._tlsOpts.servername,
-            });
+        _openSocket(retryFresh) {
+            const key = poolKey(this._host, this._port);
+            this._sockPoolKey = key;
+            let sock = retryFresh ? null : popLiveFromPool(key);
+            const fromPool = sock != null;
+            if (!sock) {
+                sock = connect({
+                    host: this._host,
+                    port: this._port,
+                    ca: this._tlsOpts.ca,
+                    rejectUnauthorized: this._tlsOpts.rejectUnauthorized,
+                    servername: this._tlsOpts.servername,
+                });
+            }
             this._socket = sock;
+            this._fromPool = fromPool;
+            this._headersReceived = false;
 
             const parser = makeResponseParser({
-                onHeaders: (msg) => this._onHeaders(msg),
+                onHeaders: (msg) => { this._headersReceived = true; this._onHeaders(msg); },
                 onError: (err) => this._failed(err),
+                onComplete: () => this._releaseSocket(),
             });
             this._parser = parser;
 
-            sock.on('data', (chunk) => parser.feed(chunk));
-            sock.on('end', () => parser.end());
-            sock.on('error', (err) => this._failed(err));
-            sock.on('close', () => {
+            // Pooled-socket race: server can close an idle keep-alive between
+            // our claim and our send. If we observe end/close/error before
+            // any response bytes arrive, drop the stale socket and replay
+            // the request on a fresh connection.
+            const isStalePooled = () =>
+                this._fromPool && !this._headersReceived && !this._destroyed;
+            const onData = (chunk) => parser.feed(chunk);
+            const onEnd = () => {
+                if (isStalePooled()) { retryFreshFrom(); return; }
+                parser.end();
+            };
+            const onClose = () => {
+                if (isStalePooled()) { retryFreshFrom(); return; }
                 if (!parser.completed) parser.end();
-            });
+            };
+            const onError = (err) => {
+                if (isStalePooled()) { retryFreshFrom(); return; }
+                this._failed(err);
+            };
+            const retryFreshFrom = () => {
+                sock.removeListener('data', onData);
+                sock.removeListener('end', onEnd);
+                sock.removeListener('close', onClose);
+                sock.removeListener('error', onError);
+                try { sock.destroy(); } catch (_) { /* ignore */ }
+                this._connected = false;
+                this._headersSent = false;
+                this._openSocket(true);
+            };
+            sock.on('data', onData);
+            sock.on('end', onEnd);
+            sock.on('error', onError);
+            sock.on('close', onClose);
+            this._sockListeners = { onData, onEnd, onError, onClose };
 
             // net.Socket emits 'connect'; tls.TLSSocket emits 'secureConnect'.
-            // Listen for both — only one will fire per transport.
+            // Listen for both — only one will fire per transport. Pooled
+            // sockets are already connected, so jump straight to ready.
             const onReady = () => {
                 if (this._destroyed) return;
                 this._connected = true;
                 this._sendHeaders();
                 for (const buf of this._pendingBody) this._socket.write(buf);
                 this._pendingBody = [];
+                // Drain bytes the previous response left buffered on this
+                // socket — they're the start of OUR response (server
+                // pipelined, or our parser read past end-of-message).
+                const stash = sock._pendingBytes;
+                if (stash && stash.length > 0) {
+                    sock._pendingBytes = null;
+                    parser.feed(stash);
+                }
             };
-            sock.once('connect', onReady);
-            sock.once('secureConnect', onReady);
+            if (fromPool) {
+                queueMicrotask(onReady);
+            } else {
+                sock.once('connect', onReady);
+                sock.once('secureConnect', onReady);
+            }
+        }
+
+        _releaseSocket() {
+            const sock = this._socket;
+            if (!sock) return;
+            this._socket = null;
+            const lst = this._sockListeners;
+            sock.removeListener('data', lst.onData);
+            sock.removeListener('end', lst.onEnd);
+            sock.removeListener('error', lst.onError);
+            sock.removeListener('close', lst.onClose);
+            if (this._destroyed || this._redirected || this._respConnectionClose) {
+                try { sock.destroy(); } catch (_) { /* ignore */ }
+                return;
+            }
+            // Pause the underlying Readable: removing the 'data' listener does
+            // NOT clear flowing=true, so chunks pushed while idle in the pool
+            // would emit('data') to zero listeners and be silently dropped.
+            // With flowing=false, push buffers; the next claimer's on('data')
+            // triggers a drain into the new parser.
+            try { sock.pause(); } catch (_) { /* ignore */ }
+            // Stash any bytes the parser read past end-of-message — they
+            // belong to the next response on this connection.
+            const left = this._parser && this._parser.getRemainder();
+            if (left && left.length > 0) {
+                const prev = sock._pendingBytes;
+                if (prev && prev.length > 0) {
+                    const merged = new Uint8Array(prev.length + left.length);
+                    merged.set(prev, 0);
+                    merged.set(left, prev.length);
+                    sock._pendingBytes = merged;
+                } else {
+                    sock._pendingBytes = left;
+                }
+            }
+            returnToPool(this._sockPoolKey, sock);
         }
 
         _sendHeaders() {
@@ -3074,6 +3214,7 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
 
         _onHeaders(msg) {
             if (this._destroyed) return;
+            this._respConnectionClose = /(^|,)\s*close\s*(,|$)/i.test(msg.headers.connection || '');
             // Auto-redirect (opt-in).
             if (this._followRedirects
                 && msg.statusCode >= 300 && msg.statusCode < 400
