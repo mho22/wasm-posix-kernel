@@ -129,12 +129,14 @@ Located in `examples/browser/pages/`:
 | mariadb-test | MariaDB + mysqltest | dinit + spawn | Playwright-driven mysql-test runner |
 | benchmark | (per-suite) | legacy spawn | Micro-benchmarks + WordPress + Erlang ring |
 | doom | fbDOOM | legacy spawn | `/dev/fb0` framebuffer + canvas renderer + keyboard via stdin |
+| webrtc | (none) | none | Manual-SDP `RTCDataChannel` between two browsers, chat + RTT — not kernel-backed; prerequisite for the future `RelayNetworkBackend` |
 
 The "Boot pattern" column reflects how the demo enters the kernel:
 - **`kernel.boot`** — `kernelOwnedFs: true`, exec the language interpreter as the first process.
 - **dinit** — `kernelOwnedFs: true`, exec dinit (PID 1), which brings up the per-demo service tree.
 - **dinit + spawn** — dinit boots the supervised services; the page spawns transient binaries (e.g. mysqltest) via `kernel.spawn()`.
 - **legacy spawn** — main thread restores a `MemoryFileSystem`, page calls `kernel.spawn(programBytes, argv)` for each binary.
+- **none** — the page never instantiates a kernel; it exercises a browser API in isolation. See the WebRTC page README at `examples/browser/pages/webrtc/README.md` for how to run it on two LAN machines.
 
 Run demos: `cd examples/browser && npx vite --port 5198`
 
