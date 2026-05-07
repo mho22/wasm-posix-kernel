@@ -135,7 +135,7 @@ function wireDataChannel(channel: RTCDataChannel): void {
     stopPingPong();
   });
   channel.addEventListener("error", (ev) => {
-    logMsg(`data channel error: ${(ev as RTCErrorEvent).error?.message ?? ev}`, "error");
+    logMsg(`data channel error: ${(ev as RTCErrorEvent).error?.message ?? "unknown"}`, "error");
   });
   channel.addEventListener("message", (ev: MessageEvent<string>) => {
     handleIncoming(ev.data);
@@ -178,27 +178,23 @@ function stopPingPong(): void {
 }
 
 type CandidateStats = { candidateType?: string };
-type CandidatePairStats = RTCIceCandidatePairStats & {
-  localCandidateId: string;
-  remoteCandidateId: string;
-};
 
 async function refreshCandidatePair(): Promise<void> {
   if (!pc) return;
   // RTCStatsReport is a Map<string, any> at runtime; the lib.dom type
   // omits Map's read accessors, hence the cast.
   const stats = (await pc.getStats()) as unknown as Map<string, RTCStats>;
-  let pair: CandidatePairStats | null = null;
-  stats.forEach((s) => {
-    if (s.type === "candidate-pair") {
-      const cp = s as CandidatePairStats;
-      if (cp.nominated && cp.state === "succeeded") pair = cp;
-      else if (!pair && cp.state === "succeeded") pair = cp;
-    }
-  });
+  let pair: RTCIceCandidatePairStats | null = null;
+  for (const s of stats.values()) {
+    if (s.type !== "candidate-pair") continue;
+    const cp = s as RTCIceCandidatePairStats;
+    if (cp.state !== "succeeded") continue;
+    if (cp.nominated) { pair = cp; break; }
+    pair ??= cp;
+  }
   if (!pair) return;
-  const local  = stats.get((pair as CandidatePairStats).localCandidateId)  as CandidateStats | undefined;
-  const remote = stats.get((pair as CandidatePairStats).remoteCandidateId) as CandidateStats | undefined;
+  const local  = stats.get(pair.localCandidateId)  as CandidateStats | undefined;
+  const remote = stats.get(pair.remoteCandidateId) as CandidateStats | undefined;
   if (!local || !remote) return;
   candidatePair = {
     local:  local.candidateType  ?? "unknown",
@@ -263,14 +259,10 @@ async function doAcceptAnswer(): Promise<void> {
 
 function resetSession(): void {
   stopPingPong();
-  if (dc) {
-    try { dc.close(); } catch { /* ignore */ }
-    dc = null;
-  }
-  if (pc) {
-    try { pc.close(); } catch { /* ignore */ }
-    pc = null;
-  }
+  dc?.close();
+  pc?.close();
+  dc = null;
+  pc = null;
   candidatePair = null;
   lastRtt = null;
 }
@@ -286,14 +278,8 @@ function doReset(): void {
 
 async function doCopyLocal(): Promise<void> {
   if (!els.localSdp.value) return;
-  try {
-    await navigator.clipboard.writeText(els.localSdp.value);
-    logMsg("local SDP copied to clipboard", "system");
-  } catch {
-    els.localSdp.select();
-    document.execCommand("copy");
-    logMsg("local SDP copied (fallback)", "system");
-  }
+  await navigator.clipboard.writeText(els.localSdp.value);
+  logMsg("local SDP copied to clipboard", "system");
 }
 
 function doSend(ev: SubmitEvent): void {
@@ -324,5 +310,3 @@ setState("idle");
   get dc() { return dc; },
   get state() { return state; },
 };
-
-console.log("[webrtc] loaded");
