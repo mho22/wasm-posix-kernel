@@ -1,12 +1,8 @@
 /**
- * Node browser demo — xterm.js terminal where each line you type spawns a
- * fresh `node` (or `npm`) process inside the wasm-posix kernel.
- *
- * The persistent REPL works (js_node_loop accounts for setReadHandler
- * watches), but the one-process-per-line model is what makes
- * `npm install foo && node use-foo` meaningful in this UI: each command
- * loads a fresh VFS image, so users can re-run installs without state
- * leaking between attempts.
+ * Node browser demo — xterm.js terminal. Each Enter spawns a fresh
+ * `node`/`npm` process so `npm install foo && node use-foo` always starts
+ * from the on-disk VFS image. Bare `node` instead drops into the
+ * persistent QuickJS REPL backed by one long-lived process; `\q` exits.
  */
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -25,10 +21,15 @@ const NPM_CLI = "/usr/local/lib/npm/bin/npm-cli.js";
 const PROMPT = "\x1b[32m$\x1b[0m ";
 
 const decoder = new TextDecoder();
+const encoder = new TextEncoder();
 
 let kernelBytes: ArrayBuffer | null = null;
 let nodeBytes: ArrayBuffer | null = null;
 let vfsImageBuf: ArrayBuffer | null = null;
+
+// Set while a persistent REPL process is running; xterm input is pumped
+// straight into its stdin and lineBuf editing is bypassed.
+let repl: { kernel: BrowserKernel; pid: number } | null = null;
 
 // --- Terminal setup ---------------------------------------------------------
 
@@ -169,6 +170,57 @@ async function loadBinaries(): Promise<void> {
   );
 }
 
+async function enterRepl(): Promise<void> {
+  busy = true;
+
+  try {
+    await loadBinaries();
+
+    const memfs = MemoryFileSystem.fromImage(new Uint8Array(vfsImageBuf!), {
+      maxByteLength: 256 * 1024 * 1024,
+    });
+
+    const kernel = new BrowserKernel({
+      memfs,
+      onStdout: (data) => term.write(data),
+      onStderr: (data) => term.write(`\x1b[31m${decoder.decode(data)}\x1b[0m`),
+    });
+
+    await kernel.init(kernelBytes!);
+
+    // spawn() doesn't return the pid; nextPid is allocated synchronously
+    // when spawn's body starts, so peeking before the call is safe.
+    const pid = kernel.nextPid;
+    const exitPromise = kernel.spawn(nodeBytes!, ["node"], {
+      env: [
+        "HOME=/work",
+        "PWD=/work",
+        "TMPDIR=/tmp",
+        // The REPL needs cursor/color sequences; shell-mode TERM=dumb
+        // would suppress its prompt entirely.
+        "TERM=xterm-256color",
+        "LANG=en_US.UTF-8",
+        "PATH=/usr/local/bin:/usr/bin:/bin",
+      ],
+    });
+
+    repl = { kernel, pid };
+
+    const t0 = performance.now();
+    const exit = await exitPromise;
+    const dt = ((performance.now() - t0) / 1000).toFixed(2);
+    write(`\r\n\x1b[90m[exit ${exit}, ${dt}s]\x1b[0m`);
+  } catch (e) {
+    write(`\r\n\x1b[31mError: ${e}\x1b[0m`);
+    console.error(e);
+  } finally {
+    repl = null;
+    busy = false;
+    newPrompt();
+    term.focus();
+  }
+}
+
 async function runCommand(line: string): Promise<void> {
   busy = true;
 
@@ -231,6 +283,10 @@ async function runCommand(line: string): Promise<void> {
 // --- Input handling ---------------------------------------------------------
 
 term.onData((data) => {
+  if (repl) {
+    repl.kernel.appendStdinData(repl.pid, encoder.encode(data));
+    return;
+  }
   if (busy) {
     // Allow Ctrl-C to abort... but we don't actually wire kill yet, so just
     // ignore input during a running command. (The kernel.spawn promise has
@@ -271,7 +327,9 @@ term.onData((data) => {
       if (line.trim()) {
         history.push(line);
         if (history.length > 200) history.shift();
-        runCommand(line);            // async; new prompt printed in finally
+        // async; new prompt printed in finally
+        if (line.trim() === "node") enterRepl();
+        else runCommand(line);
       } else {
         newPrompt();
       }
@@ -355,6 +413,6 @@ clearBtn.addEventListener("click", () => {
 
 // --- Boot ------------------------------------------------------------------
 
-writeln("\x1b[90mWelcome to node-wasm. Type a command (e.g. node --version, npm install cowsay && cowsay 'Hello Kandelo').\x1b[0m");
+writeln("\x1b[90mWelcome to node-wasm. Type a command (e.g. node --version, npm install cowsay && cowsay 'Hello Kandelo'). Type `node` alone to enter the REPL; \\q to exit.\x1b[0m");
 write(PROMPT);
 term.focus();
