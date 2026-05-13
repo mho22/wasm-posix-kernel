@@ -18,6 +18,8 @@ export interface InitMessage {
     maxWorkers: number;
     maxMemoryPages: number;
     env: string[];
+    /** Forwarded to TlsNetworkBackendOptions.dnsAliases. */
+    dnsAliases?: Record<string, string>;
   };
 }
 

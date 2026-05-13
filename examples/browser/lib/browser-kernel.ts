@@ -46,6 +46,8 @@ export interface BrowserKernelOptions {
    *  SAB creation, mkfs, and standard directory/services setup — uses the
    *  provided filesystem as-is. */
   memfs?: MemoryFileSystem;
+  /** Forwarded to TlsNetworkBackendOptions.dnsAliases. */
+  dnsAliases?: Record<string, string>;
 }
 
 export class BrowserKernel {
@@ -190,6 +192,7 @@ export class BrowserKernel {
           maxWorkers: this.options.maxWorkers,
           maxMemoryPages: this.maxPages,
           env: this.options.env,
+          dnsAliases: this.options.dnsAliases,
         },
       };
 
