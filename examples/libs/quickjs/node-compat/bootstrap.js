@@ -776,9 +776,22 @@ const process = (() => {
 
         kill(pid, signal) {
             signal = signal || 'SIGTERM';
-            const signum = typeof signal === 'number' ? signal :
-                          { SIGTERM: 15, SIGKILL: 9, SIGINT: 2, SIGHUP: 1,
-                            SIGUSR1: 10, SIGUSR2: 12, SIGCHLD: 17 }[signal] || 15;
+            let signum;
+            if (typeof signal === 'number') {
+                signum = signal;
+            } else {
+                // Resolve against the Node os.constants.signals table (defined
+                // on `nodeOs` below — the bare `os` symbol in this file is the
+                // qjs:os primitives module imported at the top, which has no
+                // `.constants.signals`). A bare-minimum inline fallback used
+                // to silently map unknown names like 'SIGWINCH' to SIGTERM,
+                // which the default-signal handler then translated into a
+                // Terminate action (exit 143). Anything not in the table now
+                // throws, matching Node's behaviour.
+                const _sigs = nodeOs && nodeOs.constants && nodeOs.constants.signals;
+                signum = (_sigs && _sigs[signal]) | 0;
+                if (!signum) throw new Error("Unknown signal: " + signal);
+            }
             os.kill(pid, signum);
         },
 
@@ -899,18 +912,128 @@ function _createWriteStream(fd) {
 
 function _createReadStream(fd) {
     if (_stdin) return _stdin;
+    // Real readable-stream surface for stdin. TUI libraries (readline,
+    // prompts, etc.) call resume()+on('data',cb) and expect bytes from fd 0.
+    // The previous stub turned every method into a no-op, so TUIs rendered
+    // their initial frame and the QuickJS loop exited immediately because no
+    // jobs/timers/watches were live. Wiring through os.setReadHandler keeps
+    // the loop alive (js_node_loop in node-main.c counts setReadHandler
+    // watches via js_std_has_io_handlers) and delivers keystrokes.
+    const listeners = new Map(); // event → cb[]
+    const READ_BUF = new ArrayBuffer(4096);
+    const READ_VIEW = new Uint8Array(READ_BUF);
+    let watchInstalled = false;
+    let ended = false;
+    let _encoding = null;
+    let _decoder = null;
+
+    function _emit(event, ...args) {
+        const arr = listeners.get(event);
+        if (!arr || arr.length === 0) return false;
+        for (const cb of arr.slice()) {
+            try { cb(...args); }
+            catch (e) { Promise.reject(e); }
+        }
+        return true;
+    }
+
+    function _onReadable() {
+        let n;
+        try { n = os.read(fd, READ_BUF, 0, READ_VIEW.byteLength); }
+        catch (e) { _emit('error', e); return; }
+        if (n <= 0) {
+            // EOF (or unexpected) → stop pumping and emit end.
+            ended = true;
+            _uninstall();
+            _emit('end');
+            _emit('close');
+            return;
+        }
+        const slice = READ_VIEW.subarray(0, n);
+        if (_encoding === 'utf8' || _encoding === 'utf-8') {
+            if (!_decoder) _decoder = new TextDecoder('utf-8', { fatal: false });
+            _emit('data', _decoder.decode(slice, { stream: true }));
+        } else {
+            const copy = new Uint8Array(n);
+            copy.set(slice);
+            _emit('data', copy);
+        }
+    }
+
+    function _install() {
+        if (watchInstalled || ended) return;
+        os.setReadHandler(fd, _onReadable);
+        watchInstalled = true;
+    }
+
+    function _uninstall() {
+        if (!watchInstalled) return;
+        os.setReadHandler(fd, null);
+        watchInstalled = false;
+    }
+
     const s = {
         fd,
         readable: true,
-        read() { return null; },
-        on() { return s; },
-        once() { return s; },
-        emit() { return false; },
-        removeListener() { return s; },
-        resume() { return s; },
-        pause() { return s; },
-        pipe(dest) { return dest; },
         isTTY: os.isatty(fd),
+        isRaw: false,
+        read() { return null; },
+        on(event, cb) {
+            if (typeof cb !== 'function') return s;
+            if (!listeners.has(event)) listeners.set(event, []);
+            listeners.get(event).push(cb);
+            if (event === 'data') _install();
+            return s;
+        },
+        addListener(event, cb) { return s.on(event, cb); },
+        once(event, cb) {
+            const wrap = (...a) => { s.removeListener(event, wrap); cb(...a); };
+            return s.on(event, wrap);
+        },
+        emit(event, ...args) { return _emit(event, ...args); },
+        removeListener(event, cb) {
+            const arr = listeners.get(event);
+            if (!arr) return s;
+            const i = arr.indexOf(cb);
+            if (i >= 0) arr.splice(i, 1);
+            return s;
+        },
+        off(event, cb) { return s.removeListener(event, cb); },
+        removeAllListeners(event) {
+            if (event === undefined) listeners.clear();
+            else listeners.delete(event);
+            return s;
+        },
+        listenerCount(event) {
+            const arr = listeners.get(event);
+            return arr ? arr.length : 0;
+        },
+        resume() { _install(); return s; },
+        pause() { _uninstall(); return s; },
+        pipe(dest) { return dest; },
+        unpipe() { return s; },
+        setEncoding(enc) {
+            _encoding = enc;
+            s._encoding = enc;
+            if (enc !== 'utf8' && enc !== 'utf-8') _decoder = null;
+            return s;
+        },
+        setRawMode(raw) {
+            // Real Node's process.stdin.setRawMode flips the TTY via
+            // tcsetattr (clears ICANON/ECHO/ICRNL/OPOST, sets VMIN=1/VTIME=0).
+            // TUIs depend on this: without it, ICRNL turns Enter `\r` into
+            // `\n`, ICANON line-buffers input until Enter, and the kernel
+            // double-echoes. See node-native.c for the tcsetattr plumbing.
+            const want = !!raw;
+            if (s.isTTY && typeof _nodeNative.setRawMode === 'function') {
+                _nodeNative.setRawMode(fd, want);
+            }
+            s.isRaw = want;
+            return s;
+        },
+        unref() { return s; },
+        ref() { return s; },
+        destroy() { _uninstall(); listeners.clear(); return s; },
     };
     _stdin = s;
     return s;
@@ -1445,6 +1568,28 @@ const fs = (() => {
                 on() { return this; },
             };
         },
+
+        // No filesystem-watch primitive in our wasm sysroot — return an
+        // inert FSWatcher so callers can listen() and close() without
+        // exploding. CLI tools that call fs.watch for live updates simply
+        // won't get them, which is fine for one-shot invocations.
+        watch(_path, _options, listener) {
+            const w = {
+                on() { return this; },
+                once() { return this; },
+                addListener() { return this; },
+                removeListener() { return this; },
+                off() { return this; },
+                close() {},
+                ref() { return this; },
+                unref() { return this; },
+            };
+            if (typeof _options === 'function') listener = _options;
+            // listener is never called, since we don't observe changes.
+            return w;
+        },
+        watchFile() {},
+        unwatchFile() {},
     };
 
     // fs.promises
@@ -1525,7 +1670,9 @@ const nodeOs = (() => {
                 SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
                 SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGCHLD: 17,
                 SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21,
-                SIGTTOU: 22,
+                SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25,
+                SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29,
+                SIGPWR: 30, SIGSYS: 31,
             },
             errno: {
                 EPERM: 1, ENOENT: 2, ESRCH: 3, EINTR: 4,
@@ -1663,9 +1810,31 @@ const util = (() => {
     // primary caller.
     function formatWithOptions(_opts, ...args) { return format(...args); }
 
+    // util.debuglog(set) — Node returns a stderr logger gated on the
+    // NODE_DEBUG env var. undici/diagnostics calls this at module init and
+    // also reads `.enabled` to short-circuit format work. We honour the env
+    // var so users can opt in for debugging.
+    function debuglog(set, callback) {
+        const env = (process.env && process.env.NODE_DEBUG) || '';
+        const enabled = env.split(/[\s,]+/).filter(Boolean).some((tok) => {
+            if (tok === set) return true;
+            // Wildcard match (Node supports e.g. NODE_DEBUG=undici*).
+            if (tok.endsWith('*')) return set.startsWith(tok.slice(0, -1));
+            return false;
+        });
+        const log = enabled
+            ? (...args) => process.stderr.write(
+                `${set.toUpperCase()} ${process.pid}: ${format(...args)}\n`)
+            : () => {};
+        Object.defineProperty(log, 'enabled', { value: enabled, enumerable: true });
+        if (typeof callback === 'function') callback(log);
+        return log;
+    }
+
     return {
         format, formatWithOptions, inspect, inherits, deprecate, promisify, callbackify,
         isDeepStrictEqual, types,
+        debuglog, debug: debuglog,
         TextDecoder, TextEncoder,
         // Deprecated but widely used
         isArray: Array.isArray,
@@ -2044,8 +2213,20 @@ const url = (() => {
             }
         }
         get(key) { return this._params[key]; }
-        set(key, val) { this._params[key] = val; }
+        set(key, val) { this._params[key] = String(val); }
         has(key) { return key in this._params; }
+        append(key, val) { if (!(key in this._params)) this._params[key] = String(val); }
+        delete(key) { delete this._params[key]; }
+        getAll(key) { return key in this._params ? [this._params[key]] : []; }
+        *entries() {
+            for (const k of Object.keys(this._params)) yield [k, this._params[k]];
+        }
+        *keys() { for (const k of Object.keys(this._params)) yield k; }
+        *values() { for (const k of Object.keys(this._params)) yield this._params[k]; }
+        [Symbol.iterator]() { return this.entries(); }
+        forEach(cb, thisArg) {
+            for (const k of Object.keys(this._params)) cb.call(thisArg, this._params[k], k, this);
+        }
         toString() {
             return Object.entries(this._params)
                 .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
@@ -2071,10 +2252,32 @@ const url = (() => {
         }
         toString() { return format(this); }
     };
+    function fileURLToPath(u) {
+        // Accept URL instance or string. Strip "file://", decode %XX.
+        const s = typeof u === 'string' ? u : (u && u.href);
+        if (typeof s !== 'string') {
+            throw new TypeError('fileURLToPath: expected URL or string');
+        }
+        if (!s.startsWith('file://')) {
+            throw new TypeError('fileURLToPath: only file: URLs supported');
+        }
+        let p = s.slice('file://'.length);
+        // Optional host segment is dropped; only the path portion is kept.
+        const slash = p.indexOf('/');
+        if (slash > 0) p = p.slice(slash);
+        else if (slash !== 0) p = '/' + p;
+        return decodeURIComponent(p);
+    }
+    function pathToFileURL(p) {
+        if (typeof p !== 'string') p = String(p);
+        if (!p.startsWith('/')) p = '/' + p;
+        return new URLClass('file://' + encodeURI(p));
+    }
     return {
         parse, format, resolve,
         URL: URLClass,
         URLSearchParams: SearchParamsClass,
+        fileURLToPath, pathToFileURL,
     };
 })();
 
@@ -2192,7 +2395,18 @@ const timersPromises = {
 const child_process = (() => {
     function execSync(command, options) {
         const opts = options || {};
-        const f = std.popen(command, 'r');
+        // Real Node's spawn{,Sync}/exec{,Sync} default to stdio:'pipe', which
+        // captures the child's stderr into result.stderr instead of letting
+        // it leak to the parent's terminal. popen("…", "r") inherits stderr,
+        // so dash's "command not found" messages from probes like
+        // commandExists('fd') used to render right in the user's terminal.
+        // We don't actually capture stderr (our result.stderr is always
+        // empty), but at minimum we must not leak it. Only inherit when the
+        // caller explicitly asked for it.
+        const inheritStderr = opts.stdio === 'inherit'
+            || (Array.isArray(opts.stdio) && opts.stdio[2] === 'inherit');
+        const popenCmd = inheritStderr ? command : command + ' 2>/dev/null';
+        const f = std.popen(popenCmd, 'r');
         if (!f) throw new Error(`execSync failed: ${command}`);
         let output = '';
         let line;
@@ -2239,6 +2453,18 @@ const child_process = (() => {
         }
     }
 
+    function execFile(file, args, options, cb) {
+        if (typeof args === 'function') { cb = args; args = []; options = {}; }
+        else if (typeof options === 'function') { cb = options; options = {}; }
+        const cmd = file + ' ' + (args || []).map(a => `'${a}'`).join(' ');
+        try {
+            const result = execSync(cmd, { ...options, encoding: 'utf8' });
+            queueMicrotask(() => cb && cb(null, result, ''));
+        } catch (e) {
+            queueMicrotask(() => cb && cb(e, e.stdout || '', e.stderr || ''));
+        }
+    }
+
     function spawn(command, args, options) {
         // Return a minimal ChildProcess-like object
         const child = new events.EventEmitter();
@@ -2266,7 +2492,7 @@ const child_process = (() => {
         return child;
     }
 
-    return { execSync, execFileSync, spawnSync, exec, spawn };
+    return { execSync, execFileSync, spawnSync, exec, execFile, spawn };
 })();
 
 // ============================================================
@@ -3349,6 +3575,7 @@ const _builtinModules = {
     'fs/promises': fs.promises,
     'os': nodeOs,
     'util': util,
+    'util/types': util.types,
     'assert': assert,
     'assert/strict': assert,
     'stream': stream,
@@ -3476,6 +3703,125 @@ const _builtinModules = {
         isPrimary: true,
         isWorker: false,
     },
+    // node:console — exposes the Console class so libs (e.g. undici's mock
+    // formatter) can construct a logger backed by arbitrary streams. The
+    // global `console` in QuickJS is not an instance of this class; that
+    // matches Node's runtime behaviour (`globalThis.console` is its own
+    // singleton, not produced from `new Console`).
+    'console': (() => {
+        const writeLine = (stream, args) => {
+            try {
+                stream.write(args.map((a) =>
+                    typeof a === 'string' ? a : util.inspect(a)
+                ).join(' ') + '\n');
+            } catch {}
+        };
+        class Console {
+            constructor(opts) {
+                opts = opts || {};
+                this._out = opts.stdout || process.stdout;
+                this._err = opts.stderr || opts.stdout || process.stderr;
+            }
+            log(...args) { writeLine(this._out, args); }
+            info(...args) { writeLine(this._out, args); }
+            debug(...args) { writeLine(this._out, args); }
+            warn(...args) { writeLine(this._err, args); }
+            error(...args) { writeLine(this._err, args); }
+            trace(...args) { writeLine(this._err, ['Trace:', ...args]); }
+            dir(obj) { writeLine(this._out, [util.inspect(obj)]); }
+            table(data) { writeLine(this._out, [data]); }
+            assert(cond, ...args) {
+                if (!cond) writeLine(this._err, ['Assertion failed:', ...args]);
+            }
+            count() {} countReset() {}
+            group() {} groupCollapsed() {} groupEnd() {}
+            time() {} timeEnd() {} timeLog() {}
+            clear() {}
+        }
+        return { Console, default: Console };
+    })(),
+    // No async-context tracking. AsyncResource exists so undici can subclass
+    // it; runInAsyncScope and bind are pass-throughs. AsyncLocalStorage
+    // works as a synchronous Map using a single mutable cell, sufficient
+    // for libraries that store request context once and read it back.
+    'async_hooks': (() => {
+        let _aid = 1;
+        class AsyncResource {
+            constructor(type, options) {
+                this._type = type;
+                this._aid = ++_aid;
+                this._triggerAid = (options && options.triggerAsyncId) || 0;
+            }
+            runInAsyncScope(fn, thisArg, ...args) { return fn.apply(thisArg, args); }
+            emitDestroy() { return this; }
+            asyncId() { return this._aid; }
+            triggerAsyncId() { return this._triggerAid; }
+            bind(fn) { return fn; }
+            static bind(fn) { return fn; }
+        }
+        class AsyncLocalStorage {
+            constructor() { this._store = undefined; }
+            run(store, fn, ...args) {
+                const prev = this._store;
+                this._store = store;
+                try { return fn(...args); } finally { this._store = prev; }
+            }
+            exit(fn, ...args) {
+                const prev = this._store;
+                this._store = undefined;
+                try { return fn(...args); } finally { this._store = prev; }
+            }
+            getStore() { return this._store; }
+            enterWith(store) { this._store = store; }
+            disable() { this._store = undefined; }
+        }
+        return {
+            AsyncResource,
+            AsyncLocalStorage,
+            executionAsyncId: () => 0,
+            triggerAsyncId: () => 0,
+            executionAsyncResource: () => ({}),
+            createHook: () => ({ enable() {}, disable() {} }),
+        };
+    })(),
+    // Undici's request/connect path imports diagnostics_channel at module
+    // init for tracing hooks. We're not exporting traces — return inert
+    // channels whose publish/subscribe/tracingChannel are no-ops.
+    'diagnostics_channel': (() => {
+        const makeChannel = (name) => ({
+            name,
+            hasSubscribers: false,
+            publish() {},
+            subscribe() {},
+            unsubscribe() {},
+            bindStore() {},
+            unbindStore() {},
+            runStores(_data, fn, thisArg, ...args) { return fn.apply(thisArg, args); },
+        });
+        const makeTracing = (name) => {
+            const ch = (sub) => makeChannel(name + ':' + sub);
+            return {
+                start: ch('start'),
+                end: ch('end'),
+                asyncStart: ch('asyncStart'),
+                asyncEnd: ch('asyncEnd'),
+                error: ch('error'),
+                hasSubscribers: false,
+                traceSync(fn, _ctx, thisArg, ...args) { return fn.apply(thisArg, args); },
+                tracePromise(fn, _ctx, thisArg, ...args) { return fn.apply(thisArg, args); },
+                traceCallback(fn, position, _ctx, thisArg, ...args) { return fn.apply(thisArg, args); },
+            };
+        };
+        return {
+            channel: makeChannel,
+            tracingChannel: makeTracing,
+            subscribe() {},
+            unsubscribe() {},
+            hasSubscribers() { return false; },
+            Channel: class Channel {},
+            TracingChannel: class TracingChannel {},
+        };
+    })(),
     'v8': {
         // arborist sizes its packument LRU as floor(heap_size_limit * 0.25),
         // so heap_size_limit must be > 0 or lru-cache rejects the config.
@@ -3487,6 +3833,61 @@ const _builtinModules = {
         runInThisContext(code) { return eval(code); },
         createContext(sandbox) { return sandbox || {}; },
         Script: class Script { constructor(code) { this.code = code; } runInThisContext() { return eval(this.code); } },
+    },
+    // Minimal stubs — undici/file-type/anthropic-sdk import these at module
+    // init even when their stream code paths aren't exercised by the agent's
+    // actual HTTP transport (which goes through our native socket/tls shim).
+    'stream/web': {
+        ReadableStream: class ReadableStream {},
+        WritableStream: class WritableStream {},
+        TransformStream: class TransformStream {},
+        ByteLengthQueuingStrategy: class ByteLengthQueuingStrategy {},
+        CountQueuingStrategy: class CountQueuingStrategy {},
+    },
+    'stream/promises': {
+        // Sequential pipeline: pump each .pipe() in order; promise resolves
+        // when the final destination emits 'finish' (or rejects on error).
+        pipeline(...streams) {
+            const cb = typeof streams[streams.length - 1] === 'function'
+                ? streams.pop() : undefined;
+            return new Promise((resolve, reject) => {
+                const last = streams[streams.length - 1];
+                const onErr = (e) => { cb && cb(e); reject(e); };
+                for (let i = 0; i < streams.length - 1; i++) {
+                    streams[i].on('error', onErr);
+                    streams[i].pipe(streams[i + 1]);
+                }
+                last.on('error', onErr);
+                last.on('finish', () => { cb && cb(); resolve(); });
+                last.on('end', () => { cb && cb(); resolve(); });
+            });
+        },
+        finished(stream) {
+            return new Promise((resolve, reject) => {
+                stream.on('error', reject);
+                stream.on('finish', resolve);
+                stream.on('end', resolve);
+            });
+        },
+    },
+    'stream/consumers': {
+        async buffer(stream) {
+            const chunks = [];
+            for await (const c of stream) chunks.push(Buffer.from(c));
+            return Buffer.concat(chunks);
+        },
+        async text(stream) {
+            const buf = await this.buffer(stream);
+            return buf.toString('utf8');
+        },
+        async json(stream) {
+            const txt = await this.text(stream);
+            return JSON.parse(txt);
+        },
+        async arrayBuffer(stream) {
+            const buf = await this.buffer(stream);
+            return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+        },
     },
 };
 
@@ -3718,6 +4119,248 @@ globalThis.clearImmediate = timers.clearImmediate;
 globalThis.URL = url.URL;
 globalThis.URLSearchParams = url.URLSearchParams;
 
+// Web platform globals that modern Node exposes by default. undici/whatwg-
+// fetch reach for these at module init (e.g. `webidl.is.ReadableStream =
+// MakeTypeAssertion(ReadableStream)` in undici/lib/web/webidl/index.js).
+// We don't implement real semantics — just need the symbols to exist so
+// instanceof checks don't ReferenceError. The agent's --version path
+// doesn't actually exercise fetch; once it does, swap these for real impls.
+const _streamWeb = _builtinModules['stream/web'];
+if (typeof globalThis.ReadableStream === 'undefined')
+    globalThis.ReadableStream = _streamWeb.ReadableStream;
+if (typeof globalThis.WritableStream === 'undefined')
+    globalThis.WritableStream = _streamWeb.WritableStream;
+if (typeof globalThis.TransformStream === 'undefined')
+    globalThis.TransformStream = _streamWeb.TransformStream;
+if (typeof globalThis.ByteLengthQueuingStrategy === 'undefined')
+    globalThis.ByteLengthQueuingStrategy = _streamWeb.ByteLengthQueuingStrategy;
+if (typeof globalThis.CountQueuingStrategy === 'undefined')
+    globalThis.CountQueuingStrategy = _streamWeb.CountQueuingStrategy;
+if (typeof globalThis.Blob === 'undefined') globalThis.Blob = class Blob {};
+if (typeof globalThis.File === 'undefined') globalThis.File = class File {};
+if (typeof globalThis.FormData === 'undefined') globalThis.FormData = class FormData {};
+if (typeof globalThis.Headers === 'undefined') globalThis.Headers = class Headers {};
+if (typeof globalThis.Request === 'undefined') globalThis.Request = class Request {};
+if (typeof globalThis.Response === 'undefined') globalThis.Response = class Response {};
+if (typeof globalThis.MessagePort === 'undefined') globalThis.MessagePort = class MessagePort {};
+if (typeof globalThis.MessageChannel === 'undefined')
+    globalThis.MessageChannel = class MessageChannel {
+        constructor() { this.port1 = new MessagePort(); this.port2 = new MessagePort(); }
+    };
+if (typeof globalThis.BroadcastChannel === 'undefined')
+    globalThis.BroadcastChannel = class BroadcastChannel {
+        constructor(name) { this.name = name; }
+        postMessage() {} close() {}
+        addEventListener() {} removeEventListener() {}
+    };
+
+// Web Crypto global. Modern Node (19+) exposes `globalThis.crypto` separately
+// from `require('crypto')`. uuid/dist-node/rng.js and many other packages
+// reach for the bare `crypto.getRandomValues()` here without importing
+// anything — undefined crypto → silent rejection during session init.
+if (typeof globalThis.crypto === 'undefined') {
+    globalThis.crypto = {
+        getRandomValues: crypto.getRandomValues,
+        randomUUID: crypto.randomUUID,
+        // Subtle is left unimplemented; consumers that actually need it
+        // will fail loudly, which is preferable to a silent stub.
+    };
+}
+
+// structuredClone — Node 17+ global. Settings managers and other helpers
+// use it to deep-copy plain config objects. Falls back to JSON for the
+// JSON-safe values these consumers actually pass; will visibly fail on
+// non-JSON types (Date, Map, etc.) which we'd rather not silently mangle.
+if (typeof globalThis.structuredClone === 'undefined') {
+    globalThis.structuredClone = function structuredClone(value) {
+        return JSON.parse(JSON.stringify(value));
+    };
+}
+
+// AbortController/AbortSignal — used pervasively (undici, anthropic-sdk,
+// timers/promises). The bootstrap timers module already references
+// AbortSignal in its options bag for setTimeout. A minimal event-emitter-
+// style implementation is enough: signal.aborted toggles, listeners fire
+// once on abort. Real Node tracks reasons and AbortSignal.timeout() —
+// we add timeout() because @anthropic-ai/sdk uses it for request timeouts.
+// DOM Event/EventTarget — modern Node exposes these as globals. undici's
+// websocket layer subclasses Event and uses EventTarget. We don't dispatch
+// events through them in real flows here; just need the symbols so class
+// extension works at module init.
+if (typeof globalThis.Event === 'undefined') {
+    globalThis.Event = class Event {
+        constructor(type, init) {
+            this.type = type;
+            this.bubbles = !!(init && init.bubbles);
+            this.cancelable = !!(init && init.cancelable);
+            this.composed = !!(init && init.composed);
+            this.defaultPrevented = false;
+            this.target = null;
+            this.currentTarget = null;
+            this.timeStamp = Date.now();
+        }
+        preventDefault() { this.defaultPrevented = true; }
+        stopPropagation() {}
+        stopImmediatePropagation() {}
+    };
+}
+if (typeof globalThis.EventTarget === 'undefined') {
+    globalThis.EventTarget = class EventTarget {
+        constructor() { this._lst = new Map(); }
+        addEventListener(type, listener) {
+            if (!this._lst.has(type)) this._lst.set(type, new Set());
+            this._lst.get(type).add(listener);
+        }
+        removeEventListener(type, listener) {
+            const s = this._lst.get(type);
+            if (s) s.delete(listener);
+        }
+        dispatchEvent(ev) {
+            const s = this._lst.get(ev.type);
+            if (s) for (const l of s) {
+                try { typeof l === 'function' ? l.call(this, ev) : l.handleEvent(ev); } catch {}
+            }
+            return !ev.defaultPrevented;
+        }
+    };
+}
+if (typeof globalThis.MessageEvent === 'undefined')
+    globalThis.MessageEvent = class MessageEvent extends globalThis.Event {
+        constructor(type, init) { super(type, init); this.data = init && init.data; }
+    };
+if (typeof globalThis.CloseEvent === 'undefined')
+    globalThis.CloseEvent = class CloseEvent extends globalThis.Event {
+        constructor(type, init) {
+            super(type, init);
+            this.code = (init && init.code) || 0;
+            this.reason = (init && init.reason) || '';
+            this.wasClean = !!(init && init.wasClean);
+        }
+    };
+if (typeof globalThis.ErrorEvent === 'undefined')
+    globalThis.ErrorEvent = class ErrorEvent extends globalThis.Event {
+        constructor(type, init) { super(type, init); this.error = init && init.error; this.message = (init && init.message) || ''; }
+    };
+if (typeof globalThis.CustomEvent === 'undefined')
+    globalThis.CustomEvent = class CustomEvent extends globalThis.Event {
+        constructor(type, init) { super(type, init); this.detail = init && init.detail; }
+    };
+if (typeof globalThis.DOMException === 'undefined') {
+    globalThis.DOMException = class DOMException extends Error {
+        constructor(message, name) {
+            super(message);
+            this.name = name || 'Error';
+            this.code = 0;
+        }
+    };
+}
+
+if (typeof globalThis.AbortSignal === 'undefined') {
+    class AbortSignal {
+        constructor() {
+            this.aborted = false;
+            this.reason = undefined;
+            this._listeners = new Set();
+        }
+        addEventListener(type, listener) {
+            if (type === 'abort') this._listeners.add(listener);
+        }
+        removeEventListener(type, listener) {
+            if (type === 'abort') this._listeners.delete(listener);
+        }
+        dispatchEvent(ev) {
+            if (ev && ev.type === 'abort')
+                for (const l of this._listeners) l.call(this, ev);
+            return true;
+        }
+        throwIfAborted() { if (this.aborted) throw this.reason; }
+        static abort(reason) {
+            const s = new AbortSignal();
+            s.aborted = true;
+            s.reason = reason;
+            return s;
+        }
+        static timeout(ms) {
+            const s = new AbortSignal();
+            timers.setTimeout(() => {
+                s.aborted = true;
+                s.reason = new Error('The operation was aborted due to timeout');
+                s.reason.name = 'TimeoutError';
+                for (const l of s._listeners) {
+                    try { l.call(s, { type: 'abort', target: s }); } catch {}
+                }
+            }, ms);
+            return s;
+        }
+        static any(signals) {
+            const s = new AbortSignal();
+            for (const sig of signals) {
+                if (sig.aborted) { s.aborted = true; s.reason = sig.reason; return s; }
+                sig.addEventListener('abort', () => {
+                    if (s.aborted) return;
+                    s.aborted = true;
+                    s.reason = sig.reason;
+                    for (const l of s._listeners) {
+                        try { l.call(s, { type: 'abort', target: s }); } catch {}
+                    }
+                });
+            }
+            return s;
+        }
+    }
+    globalThis.AbortSignal = AbortSignal;
+}
+if (typeof globalThis.AbortController === 'undefined') {
+    globalThis.AbortController = class AbortController {
+        constructor() { this.signal = new globalThis.AbortSignal(); }
+        abort(reason) {
+            const s = this.signal;
+            if (s.aborted) return;
+            s.aborted = true;
+            s.reason = reason !== undefined ? reason : new Error('aborted');
+            for (const l of s._listeners) {
+                try { l.call(s, { type: 'abort', target: s }); } catch {}
+            }
+        }
+    };
+}
+
+// QuickJS-NG ships without ECMA-402 (Intl). TUIs use Intl.Segmenter for
+// grapheme-based terminal-width math; a per-code-point fallback is good
+// enough for ASCII / BMP — non-trivial graphemes (emoji ZWJ sequences,
+// combining marks) collapse to multiple segments, which most UIs tolerate.
+if (typeof globalThis.Intl === 'undefined') {
+    globalThis.Intl = {
+        Segmenter: class Segmenter {
+            constructor(_locale, _options) {}
+            segment(input) {
+                const s = String(input);
+                return {
+                    [Symbol.iterator]: function* () {
+                        let i = 0;
+                        for (const ch of s) {
+                            yield { segment: ch, index: i, input: s };
+                            i += ch.length;
+                        }
+                    },
+                };
+            }
+        },
+        Collator: class Collator {
+            constructor(_l, _o) {}
+            compare(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+        },
+        DateTimeFormat: class DateTimeFormat {
+            constructor(_l, _o) {}
+            format(date) { return new Date(date).toISOString(); }
+        },
+        NumberFormat: class NumberFormat {
+            constructor(_l, _o) {}
+            format(n) { return String(n); }
+        },
+    };
+}
+
 // __dirname and __filename for the main module (set when running a file)
 globalThis.__filename = '';
 globalThis.__dirname = '';
@@ -3769,6 +4412,372 @@ if (!console.group) {
     console.group = (...args) => { if (args.length) console.log(...args); _depth++; };
     console.groupEnd = () => { if (_depth > 0) _depth--; };
 }
+
+// ============================================================
+// WHATWG fetch + Headers/Response/Request/ReadableStream
+// ============================================================
+//
+// Bootstrap reserves stub globals for these (Response/Headers/Request) and a
+// stub `class ReadableStream {}` from the stream/web pseudo-module. None of
+// them actually do anything. Modern HTTP SDKs (undici, @anthropic-ai/sdk,
+// the AWS SDK, etc.) call `fetch(url, { method:'POST', body, headers })`
+// and read the response via `await res.json()` or `res.body.getReader()`
+// (for streaming SSE). Without a real impl, fetch() ReferenceErrors. The
+// implementation is built on top of the existing http/https modules above.
+//
+(() => {
+    class FetchHeaders {
+        constructor(init) {
+            this._map = new Map();
+            if (init instanceof FetchHeaders) {
+                for (const [k, v] of init._map) this._map.set(k, v);
+            } else if (Array.isArray(init)) {
+                for (const [k, v] of init) this.append(k, v);
+            } else if (init && typeof init === 'object') {
+                for (const k of Object.keys(init)) this.append(k, init[k]);
+            }
+        }
+        _k(name) { return String(name).toLowerCase(); }
+        get(name) { const v = this._map.get(this._k(name)); return v === undefined ? null : v; }
+        set(name, value) { this._map.set(this._k(name), String(value)); }
+        has(name) { return this._map.has(this._k(name)); }
+        delete(name) { return this._map.delete(this._k(name)); }
+        append(name, value) {
+            const k = this._k(name);
+            const cur = this._map.get(k);
+            this._map.set(k, cur === undefined ? String(value) : cur + ', ' + value);
+        }
+        forEach(cb, thisArg) {
+            for (const [k, v] of this._map) cb.call(thisArg, v, k, this);
+        }
+        keys() { return this._map.keys(); }
+        values() { return this._map.values(); }
+        entries() { return this._map.entries(); }
+        [Symbol.iterator]() { return this._map.entries(); }
+    }
+
+    // Minimal ReadableStream impl. Supports getReader().read(), async
+    // iteration, cancel, and the start({enqueue, close, error}) underlying
+    // source pattern used below. Not spec-perfect (no backpressure, no
+    // tee()) but enough for SSE consumption.
+    class MinReadableStream {
+        constructor(source) {
+            this._source = source || {};
+            this._queue = [];
+            this._closed = false;
+            this._err = null;
+            this._waiters = [];
+            this._locked = false;
+            const ctrl = {
+                enqueue: (chunk) => {
+                    if (this._closed) return;
+                    if (this._waiters.length > 0) {
+                        this._waiters.shift().resolve({ value: chunk, done: false });
+                    } else {
+                        this._queue.push(chunk);
+                    }
+                },
+                close: () => {
+                    this._closed = true;
+                    while (this._waiters.length > 0) {
+                        this._waiters.shift().resolve({ value: undefined, done: true });
+                    }
+                },
+                error: (e) => {
+                    this._err = e;
+                    this._closed = true;
+                    while (this._waiters.length > 0) this._waiters.shift().reject(e);
+                },
+                get desiredSize() { return 1; },
+            };
+            if (this._source.start) {
+                try {
+                    const r = this._source.start(ctrl);
+                    if (r && typeof r.then === 'function') r.catch(e => ctrl.error(e));
+                } catch (e) { ctrl.error(e); }
+            }
+        }
+        get locked() { return this._locked; }
+        getReader() {
+            if (this._locked) throw new TypeError('Stream is locked');
+            this._locked = true;
+            const stream = this;
+            return {
+                read: () => {
+                    if (stream._err) return Promise.reject(stream._err);
+                    if (stream._queue.length > 0) {
+                        return Promise.resolve({ value: stream._queue.shift(), done: false });
+                    }
+                    if (stream._closed) return Promise.resolve({ value: undefined, done: true });
+                    return new Promise((resolve, reject) => {
+                        stream._waiters.push({ resolve, reject });
+                    });
+                },
+                releaseLock: () => { stream._locked = false; },
+                cancel: (reason) => {
+                    stream._closed = true;
+                    try { stream._source.cancel && stream._source.cancel(reason); } catch {}
+                    return Promise.resolve();
+                },
+            };
+        }
+        [Symbol.asyncIterator]() {
+            const reader = this.getReader();
+            return {
+                next: () => reader.read(),
+                return: () => { reader.releaseLock(); return Promise.resolve({ value: undefined, done: true }); },
+                [Symbol.asyncIterator]() { return this; },
+            };
+        }
+        cancel(reason) {
+            this._closed = true;
+            try { this._source.cancel && this._source.cancel(reason); } catch {}
+            return Promise.resolve();
+        }
+    }
+
+    class FetchResponse {
+        constructor(body, init = {}) {
+            this.status = init.status !== undefined ? init.status : 200;
+            this.statusText = init.statusText || '';
+            this.ok = this.status >= 200 && this.status < 300;
+            this.headers = init.headers instanceof FetchHeaders
+                ? init.headers : new FetchHeaders(init.headers);
+            this.url = init.url || '';
+            this.redirected = !!init.redirected;
+            this.type = init.type || 'basic';
+            this._bodyUsed = false;
+            this._buffered = null;     // Uint8Array, if body was given as bytes/string
+            this._stream = null;       // MinReadableStream, if body was given as a stream
+            if (body == null) {
+                /* empty */
+            } else if (body instanceof MinReadableStream) {
+                this._stream = body;
+            } else if (body instanceof Uint8Array) {
+                this._buffered = body;
+            } else if (body instanceof ArrayBuffer) {
+                this._buffered = new Uint8Array(body);
+            } else if (typeof body === 'string') {
+                this._buffered = new TextEncoder().encode(body);
+            } else {
+                this._buffered = new TextEncoder().encode(String(body));
+            }
+        }
+        get bodyUsed() { return this._bodyUsed; }
+        get body() {
+            if (this._stream) return this._stream;
+            if (this._buffered) {
+                const bytes = this._buffered;
+                this._stream = new MinReadableStream({
+                    start(c) { c.enqueue(bytes); c.close(); },
+                });
+                this._buffered = null;
+                return this._stream;
+            }
+            return null;
+        }
+        async arrayBuffer() {
+            if (this._bodyUsed) throw new TypeError('Body already used');
+            this._bodyUsed = true;
+            if (this._buffered) {
+                const b = this._buffered;
+                return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+            }
+            if (this._stream) {
+                const reader = this._stream.getReader();
+                const parts = [];
+                let total = 0;
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    const u8 = value instanceof Uint8Array ? value : new Uint8Array(value);
+                    parts.push(u8);
+                    total += u8.byteLength;
+                }
+                const out = new Uint8Array(total);
+                let off = 0;
+                for (const p of parts) { out.set(p, off); off += p.byteLength; }
+                return out.buffer;
+            }
+            return new ArrayBuffer(0);
+        }
+        async text() {
+            const ab = await this.arrayBuffer();
+            return new TextDecoder('utf-8').decode(ab);
+        }
+        async json() {
+            const t = await this.text();
+            return JSON.parse(t);
+        }
+        async bytes() { return new Uint8Array(await this.arrayBuffer()); }
+        async blob() {
+            const ab = await this.arrayBuffer();
+            return { size: ab.byteLength, type: this.headers.get('content-type') || '',
+                     arrayBuffer: async () => ab, text: async () => new TextDecoder().decode(ab) };
+        }
+        clone() {
+            // Only safe when body is still buffered. After a stream has been
+            // consumed there's nothing left to clone — anthropic-sdk clones
+            // before reading the body, so this is OK in practice.
+            if (this._stream) throw new TypeError('Cannot clone Response whose body is a stream');
+            const init = {
+                status: this.status, statusText: this.statusText, url: this.url,
+                headers: new FetchHeaders(this.headers),
+            };
+            return new FetchResponse(this._buffered ? this._buffered.slice() : null, init);
+        }
+    }
+
+    class FetchRequest {
+        constructor(input, init = {}) {
+            if (input instanceof FetchRequest) {
+                this.url = input.url;
+                this.method = (init.method || input.method || 'GET').toUpperCase();
+                this.headers = new FetchHeaders(init.headers || input.headers);
+                this.body = init.body !== undefined ? init.body : input.body;
+                this.signal = init.signal || input.signal || null;
+            } else {
+                this.url = typeof input === 'string' ? input : (input && input.url);
+                this.method = (init.method || 'GET').toUpperCase();
+                this.headers = new FetchHeaders(init.headers || {});
+                this.body = init.body !== undefined ? init.body : null;
+                this.signal = init.signal || null;
+            }
+        }
+    }
+
+    async function fetch(input, init) {
+        init = init || {};
+        let urlStr;
+        let mergedHeaders;
+        let bodyIn;
+        let signal;
+        let method;
+        if (input instanceof FetchRequest) {
+            urlStr = input.url;
+            mergedHeaders = new FetchHeaders(input.headers);
+            if (init.headers) for (const [k, v] of new FetchHeaders(init.headers)._map) mergedHeaders.set(k, v);
+            bodyIn = init.body !== undefined ? init.body : input.body;
+            signal = init.signal || input.signal;
+            method = (init.method || input.method || 'GET').toUpperCase();
+        } else {
+            urlStr = typeof input === 'string' ? input : (input && input.url);
+            mergedHeaders = new FetchHeaders(init.headers);
+            bodyIn = init.body;
+            signal = init.signal;
+            method = (init.method || 'GET').toUpperCase();
+        }
+        if (!urlStr) throw new TypeError('fetch: invalid input');
+
+        const parsed = new URL(urlStr);
+        const client = parsed.protocol === 'https:' ? https : http;
+        const port = parsed.port ? parseInt(parsed.port, 10)
+            : (parsed.protocol === 'https:' ? 443 : 80);
+
+        // Reduce headers to plain object for http.request
+        const headerObj = {};
+        for (const [k, v] of mergedHeaders._map) headerObj[k] = v;
+
+        let bodyBuf = null;
+        if (bodyIn != null) {
+            if (typeof bodyIn === 'string') bodyBuf = Buffer.from(bodyIn, 'utf8');
+            else if (bodyIn instanceof Uint8Array) bodyBuf = Buffer.from(bodyIn.buffer, bodyIn.byteOffset, bodyIn.byteLength);
+            else if (bodyIn instanceof ArrayBuffer) bodyBuf = Buffer.from(bodyIn);
+            else if (Buffer.isBuffer && Buffer.isBuffer(bodyIn)) bodyBuf = bodyIn;
+            else bodyBuf = Buffer.from(String(bodyIn), 'utf8');
+            if (bodyBuf && !headerObj['content-length'] && !headerObj['transfer-encoding']) {
+                headerObj['content-length'] = String(bodyBuf.length);
+            }
+        }
+
+        return new Promise((resolve, reject) => {
+            let settled = false;
+            let resStream = null;
+            let resCtrl = null;
+
+            const req = client.request({
+                protocol: parsed.protocol,
+                host: parsed.hostname,
+                hostname: parsed.hostname,
+                port,
+                path: parsed.pathname + parsed.search,
+                method,
+                headers: headerObj,
+            }, (res) => {
+                if (settled) return;
+                settled = true;
+
+                resStream = new MinReadableStream({
+                    start(c) {
+                        resCtrl = c;
+                        res.on('data', (chunk) => {
+                            try {
+                                const u8 = chunk instanceof Uint8Array ? chunk
+                                    : (chunk && chunk.buffer ? new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+                                       : new TextEncoder().encode(String(chunk)));
+                                c.enqueue(u8);
+                            } catch (e) { c.error(e); }
+                        });
+                        res.on('end', () => { try { c.close(); } catch {} });
+                        res.on('error', (e) => { try { c.error(e); } catch {} });
+                    },
+                    cancel() { try { res.destroy(); } catch {} },
+                });
+
+                const respHeaders = new FetchHeaders();
+                for (const k of Object.keys(res.headers || {})) {
+                    const v = res.headers[k];
+                    if (Array.isArray(v)) for (const x of v) respHeaders.append(k, x);
+                    else if (v !== undefined) respHeaders.set(k, v);
+                }
+                resolve(new FetchResponse(resStream, {
+                    status: res.statusCode || 0,
+                    statusText: res.statusMessage || '',
+                    headers: respHeaders,
+                    url: urlStr,
+                }));
+            });
+
+            req.on('error', (e) => {
+                if (settled) {
+                    if (resCtrl) try { resCtrl.error(e); } catch {}
+                    return;
+                }
+                settled = true;
+                reject(e);
+            });
+
+            if (signal && typeof signal.addEventListener === 'function') {
+                const onAbort = () => {
+                    try { req.destroy(new Error('Aborted')); } catch {}
+                    if (settled) {
+                        if (resCtrl) try { resCtrl.error(new DOMException('Aborted', 'AbortError')); } catch {}
+                    } else {
+                        settled = true;
+                        reject(new DOMException('Aborted', 'AbortError'));
+                    }
+                };
+                if (signal.aborted) onAbort();
+                else signal.addEventListener('abort', onAbort, { once: true });
+            }
+
+            if (bodyBuf) req.write(bodyBuf);
+            req.end();
+        });
+    }
+
+    globalThis.fetch = fetch;
+    globalThis.Headers = FetchHeaders;
+    globalThis.Response = FetchResponse;
+    globalThis.Request = FetchRequest;
+    globalThis.ReadableStream = MinReadableStream;
+    // The `node:stream/web` pseudo-module also surfaces ReadableStream;
+    // some libraries import from there instead of the global. Replace the
+    // stub class with the real one.
+    if (_builtinModules['stream/web']) {
+        _builtinModules['stream/web'].ReadableStream = MinReadableStream;
+    }
+})();
 
 // Export for the C entry point to detect successful bootstrap
 globalThis.__nodeBootstrapReady = true;
