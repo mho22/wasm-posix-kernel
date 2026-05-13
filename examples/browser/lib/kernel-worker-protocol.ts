@@ -46,6 +46,8 @@ export interface InitMessage {
     /** Forwarded to KernelConfig.syscallLogPtrWidth — only log for processes
      *  of the given pointer width. */
     syscallLogPtrWidth?: 4 | 8;
+    /** Forwarded to TlsNetworkBackendOptions.dnsAliases. */
+    dnsAliases?: Record<string, string>;
   };
 }
 

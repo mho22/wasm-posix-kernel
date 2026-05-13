@@ -60,6 +60,8 @@ export interface BrowserKernelOptions {
    *  (4=wasm32, 8=wasm64). Use 8 to focus on a single wasm64 process in a
    *  mixed-arch demo. */
   syscallLogPtrWidth?: 4 | 8;
+  /** Forwarded to TlsNetworkBackendOptions.dnsAliases. */
+  dnsAliases?: Record<string, string>;
 }
 
 /** Options for {@link BrowserKernel.boot}. */
@@ -314,6 +316,7 @@ export class BrowserKernel {
           env: this.options.env,
           enableSyscallLog: this.options.enableSyscallLog,
           syscallLogPtrWidth: this.options.syscallLogPtrWidth,
+          dnsAliases: this.options.dnsAliases,
         },
       };
       this.kernelWorkerHandle.postMessage(initMsg, [transferBuf]);

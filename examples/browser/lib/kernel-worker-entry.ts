@@ -297,9 +297,10 @@ async function handleInit(msg: Extract<MainToKernelMessage, { type: "init" }>) {
   // In dev mode, use the vite CORS proxy middleware for cross-origin fetches.
   // In production, the service worker handles CORS proxying transparently.
   const devCorsProxy = import.meta.env.DEV ? "/cors-proxy?url=" : undefined;
-  const tlsBackend = new TlsNetworkBackend(
-    devCorsProxy ? { corsProxyUrl: devCorsProxy } : undefined,
-  );
+  const tlsBackend = new TlsNetworkBackend({
+    corsProxyUrl: devCorsProxy,
+    dnsAliases: msg.config.dnsAliases,
+  });
   await tlsBackend.init();
   io.network = tlsBackend;
 
