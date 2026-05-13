@@ -3867,18 +3867,20 @@ pub fn sys_mremap(
         return Ok(old_addr);
     }
 
-    // MREMAP_MAYMOVE: allocate a new mapping and free the old one
+    // MREMAP_MAYMOVE: allocate a new mapping and free the old one.
+    //
+    // The kernel cannot memcpy the user bytes itself — it runs in its own
+    // Wasm linear memory, separate from the user process's. The byte copy
+    // is performed by the host runtime in `host/src/kernel-worker.ts`'s
+    // SYS_MREMAP post-syscall fixup, which owns the user's
+    // `WebAssembly.Memory` and runs after this function returns but before
+    // the user process resumes.
     if flags & MREMAP_MAYMOVE != 0 {
         use wasm_posix_shared::mmap::{MAP_PRIVATE, MAP_ANONYMOUS};
         let new_addr = proc.memory.mmap_anonymous(0, aligned_new, 3, MAP_PRIVATE | MAP_ANONYMOUS);
         if new_addr == wasm_posix_shared::mmap::MAP_FAILED {
             return Err(Errno::ENOMEM);
         }
-        // Wasm linear memory is flat — no need to copy data in kernel,
-        // the host copies data between old and new addresses.
-        // But since we ARE the kernel tracking mappings, we just move the tracking.
-        // Actual memory content stays in Wasm linear memory — the caller (musl)
-        // handles memcpy when needed.
         proc.memory.munmap(old_addr, aligned_old);
         return Ok(new_addr);
     }
@@ -15070,6 +15072,11 @@ mod tests {
         assert_ne!(new_addr, addr1); // moved
         assert!(proc.memory.is_mapped(new_addr));
         assert!(!proc.memory.is_mapped(addr1)); // old freed
+        // Note: byte-preservation across the move (the contract that mallocng
+        // depends on) cannot be verified here — `proc.memory` is metadata
+        // only on the host, and the addresses returned above don't back any
+        // real bytes in this test process. The host-side copy is performed
+        // in `host/src/kernel-worker.ts`'s SYS_MREMAP post-syscall fixup.
     }
 
     // ---- O_CLOFORK / FD_CLOFORK tests ----
