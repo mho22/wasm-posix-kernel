@@ -45,6 +45,15 @@ static int js_node_loop(JSContext *ctx)
         int delay = js_std_loop_once(ctx); /* drains microtasks + 1 timer */
         if (delay == -2) return -1;        /* JS error */
 
+        /* js_std_loop_once drains microtasks but skips the unhandled-
+           rejection sweep that js_std_loop runs after each drain. Without
+           this, a top-level `await main(...)`-style entry that rejects
+           returns silently with exit 0 — the rejection sits forever on
+           the tracker's list. Calling the check here matches js_std_loop's
+           cadence and exits 1 with a "Possibly unhandled promise rejection"
+           message on stderr. */
+        js_std_promise_rejection_check(ctx);
+
         int dispatched = js_node_socket_dispatch(ctx);
         dispatched += js_node_tls_dispatch(ctx);
         int has_watches = js_node_socket_has_watches() ||
