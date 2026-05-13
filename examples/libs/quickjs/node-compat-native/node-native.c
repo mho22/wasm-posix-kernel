@@ -1,6 +1,10 @@
 #include "node-native.h"
 #include "cutils.h"
 
+#include <errno.h>
+#include <termios.h>
+#include <unistd.h>
+
 #include "hash.h"
 #include "hmac.h"
 #include "zlib.h"
@@ -50,6 +54,56 @@ static JSValue js_node_native_decode_utf8(JSContext *ctx,
     return JS_NewStringLen(ctx, (const char *)buf, len);
 }
 
+/* setRawMode(fd, raw) — Node-parity binding for tcsetattr(cfmakeraw(...)).
+   JS can't call tcsetattr directly; without raw mode the kernel's cooked
+   PTY (ICRNL/ICANON/ECHO) line-buffers input and echoes, breaking TUIs.
+   One saved-termios slot is enough — only stdin is ever set raw. */
+static struct termios g_saved_termios;
+static int g_saved_fd = -1; /* -1 → no saved state */
+
+static JSValue js_node_native_set_raw_mode(JSContext *ctx,
+                                           JSValueConst this_val,
+                                           int argc, JSValueConst *argv)
+{
+    int fd;
+    int raw;
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, "setRawMode(fd, raw)");
+    if (JS_ToInt32(ctx, &fd, argv[0]))
+        return JS_EXCEPTION;
+    raw = JS_ToBool(ctx, argv[1]);
+    if (raw < 0)
+        return JS_EXCEPTION;
+
+    if (raw) {
+        struct termios t;
+        if (tcgetattr(fd, &t) < 0) {
+            return JS_ThrowInternalError(ctx,
+                "setRawMode: tcgetattr(%d) failed (errno=%d)", fd, errno);
+        }
+        if (g_saved_fd != fd) {
+            g_saved_termios = t;
+            g_saved_fd = fd;
+        }
+        cfmakeraw(&t);
+        if (tcsetattr(fd, TCSANOW, &t) < 0) {
+            return JS_ThrowInternalError(ctx,
+                "setRawMode: tcsetattr(%d, raw) failed (errno=%d)", fd, errno);
+        }
+    } else {
+        if (g_saved_fd == fd) {
+            if (tcsetattr(fd, TCSANOW, &g_saved_termios) < 0) {
+                return JS_ThrowInternalError(ctx,
+                    "setRawMode: tcsetattr(%d, restore) failed (errno=%d)",
+                    fd, errno);
+            }
+            g_saved_fd = -1;
+        }
+        /* No saved state → nothing to restore; treat as a no-op. */
+    }
+    return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("evalScriptAsFunction", 2, js_node_native_eval_script_as_function),
     JS_CFUNC_DEF("createHash", 1, js_node_native_create_hash),
@@ -72,6 +126,7 @@ static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("tlsClose", 1, js_node_native_tls_close),
     JS_CFUNC_DEF("jsonParse", 1, js_node_native_json_parse),
     JS_CFUNC_DEF("decodeUtf8", 1, js_node_native_decode_utf8),
+    JS_CFUNC_DEF("setRawMode", 2, js_node_native_set_raw_mode),
 };
 
 static int node_native_module_init(JSContext *ctx, JSModuleDef *m)
