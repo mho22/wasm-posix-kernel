@@ -57,6 +57,10 @@ export interface SpawnOptions {
   cwd?: string;
   stdin?: Uint8Array;
   pty?: boolean;
+  /** Initial PTY winsize. Applied before the wasm program starts so the
+   *  first TIOCGWINSZ returns the correct cols/rows. */
+  ptyCols?: number;
+  ptyRows?: number;
   /** Limit heap growth to protect thread channel pages */
   maxAddr?: number;
   /** Called after the process has been created and started */
@@ -135,6 +139,8 @@ export class NodeKernelHost {
       env: options?.env,
       cwd: options?.cwd,
       pty: options?.pty,
+      ptyCols: options?.ptyCols,
+      ptyRows: options?.ptyRows,
       stdin: options?.stdin,
       maxAddr: options?.maxAddr,
     }) as number;

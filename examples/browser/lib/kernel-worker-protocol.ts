@@ -33,6 +33,11 @@ export interface SpawnMessage {
   env: string[];
   cwd?: string;
   pty?: boolean;
+  /** Initial PTY winsize. When set with `pty: true`, the kernel applies
+   *  the winsize before the wasm program starts so the first ioctl
+   *  returns the correct cols/rows. */
+  ptyCols?: number;
+  ptyRows?: number;
   stdin?: Uint8Array;
   maxPages?: number;
 }

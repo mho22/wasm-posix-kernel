@@ -8585,6 +8585,11 @@ pub extern "C" fn kernel_pty_master_read(pty_idx: u32, buf_ptr: *mut u8, buf_len
 
 /// Set the window size of a PTY and send SIGWINCH to the foreground process group.
 /// Returns 0 on success, negative errno on failure.
+///
+/// SIGWINCH is only raised when the new dimensions differ from the stored
+/// dimensions. POSIX SIGWINCH semantics are "on actual size change", and
+/// raising it on no-op calls would mid-render-interrupt TUIs that subscribe
+/// to it (ink/blessed re-render on 'resize'), corrupting cursor accounting.
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_pty_set_winsize(pty_idx: u32, rows: u32, cols: u32) -> i32 {
     let pty = match crate::pty::get_pty(pty_idx as usize) {
@@ -8592,12 +8597,21 @@ pub extern "C" fn kernel_pty_set_winsize(pty_idx: u32, rows: u32, cols: u32) -> 
         None => return -(Errno::ENOENT as i32),
     };
 
+    let new_rows = rows as u16;
+    let new_cols = cols as u16;
+    let changed =
+        pty.terminal.winsize.ws_row != new_rows || pty.terminal.winsize.ws_col != new_cols;
+
     pty.terminal.winsize = crate::terminal::WinSize {
-        ws_row: rows as u16,
-        ws_col: cols as u16,
+        ws_row: new_rows,
+        ws_col: new_cols,
         ws_xpixel: 0,
         ws_ypixel: 0,
     };
+
+    if !changed {
+        return 0;
+    }
 
     // Send SIGWINCH to foreground process group
     let fg_pgid = pty.terminal.foreground_pgid;

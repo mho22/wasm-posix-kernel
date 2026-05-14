@@ -870,9 +870,20 @@ function _hrtimeNow() {
 
 // Lazy stream creation for stdout/stderr/stdin
 let _stdout, _stderr, _stdin;
+// Per-fd cached winsize. Refreshed lazily on first read and on SIGWINCH.
+// Caching matters: ink reads process.stdout.columns hundreds of times per
+// render and routes the result into cursor-position math; an ioctl per read
+// is both slow and risks racing the kernel's PTY state during a resize.
+const _wsCache = new Map();
+function _refreshWs(fd) {
+    const ws = os.ttyGetWinSize(fd);
+    if (ws) _wsCache.set(fd, ws);
+    return _wsCache.get(fd) || null;
+}
 function _createWriteStream(fd) {
     if (fd === 1 && _stdout) return _stdout;
     if (fd === 2 && _stderr) return _stderr;
+    const listeners = new Map();
     const s = {
         fd,
         writable: true,
@@ -892,10 +903,42 @@ function _createWriteStream(fd) {
             if (data) s.write(data, encoding);
             if (typeof cb === 'function') cb();
         },
-        on() { return s; },
-        once() { return s; },
-        emit() { return false; },
-        removeListener() { return s; },
+        on(event, cb) {
+            if (typeof cb !== 'function') return s;
+            if (!listeners.has(event)) listeners.set(event, []);
+            listeners.get(event).push(cb);
+            return s;
+        },
+        addListener(event, cb) { return s.on(event, cb); },
+        once(event, cb) {
+            const wrap = (...a) => { s.removeListener(event, wrap); cb(...a); };
+            return s.on(event, wrap);
+        },
+        emit(event, ...args) {
+            const arr = listeners.get(event);
+            if (!arr || arr.length === 0) return false;
+            for (const cb of arr.slice()) {
+                try { cb(...args); } catch (e) { Promise.reject(e); }
+            }
+            return true;
+        },
+        removeListener(event, cb) {
+            const arr = listeners.get(event);
+            if (!arr) return s;
+            const i = arr.indexOf(cb);
+            if (i >= 0) arr.splice(i, 1);
+            return s;
+        },
+        off(event, cb) { return s.removeListener(event, cb); },
+        removeAllListeners(event) {
+            if (event === undefined) listeners.clear();
+            else listeners.delete(event);
+            return s;
+        },
+        listenerCount(event) {
+            const arr = listeners.get(event);
+            return arr ? arr.length : 0;
+        },
         // tty.WriteStream cursor/line no-ops. npm's progress spinner calls
         // cursorTo(0) and clearLine(1) unconditionally even when the fd
         // isn't a tty.
@@ -904,12 +947,14 @@ function _createWriteStream(fd) {
         isTTY: os.isatty(fd),
     };
     Object.defineProperties(s, {
-        // Live TIOCGWINSZ-backed accessors. TUIs (ink, blessed, pi-coding-agent)
-        // read these on every render; returning hardcoded 80×24 makes them draw
-        // at a fraction of the actual terminal width.
+        // Cached TIOCGWINSZ-backed accessors. TUIs (ink, blessed, pi-coding-agent)
+        // read these hundreds of times per render and route the result into
+        // cursor-position math; an ioctl per read is slow and risks racing
+        // the kernel's PTY state during resize. The cache is invalidated by
+        // the SIGWINCH handler below.
         columns: {
             get() {
-                const ws = os.ttyGetWinSize(fd);
+                const ws = _wsCache.get(fd) || _refreshWs(fd);
                 return ws ? ws[0] : 80;
             },
             enumerable: true,
@@ -917,7 +962,7 @@ function _createWriteStream(fd) {
         },
         rows: {
             get() {
-                const ws = os.ttyGetWinSize(fd);
+                const ws = _wsCache.get(fd) || _refreshWs(fd);
                 return ws ? ws[1] : 24;
             },
             enumerable: true,
@@ -927,6 +972,27 @@ function _createWriteStream(fd) {
     if (fd === 1) _stdout = s;
     if (fd === 2) _stderr = s;
     return s;
+}
+
+// SIGWINCH (signum 28 on Linux). The kernel raises it on every kernel_pty_set_winsize
+// call; without a JS-side handler the default action is "ignore" and ink/blessed/pi
+// keep using a stale cached columns/rows, so incremental redraws clear the wrong
+// number of rows and old frames stack on top of new ones. QuickJS doesn't expose
+// SIGWINCH via os.SIG* constants, so call os.signal with the raw signum.
+try {
+    os.signal(28, () => {
+        // Refresh the cache so the next process.stdout.columns read returns the
+        // post-resize value.
+        _refreshWs(1);
+        _refreshWs(2);
+        // Notify subscribers (ink/blessed read this and re-render at the new size).
+        if (_stdout) _stdout.emit('resize');
+        if (_stderr) _stderr.emit('resize');
+    });
+} catch (_) {
+    // Some environments (WASI builds, tests) may not support os.signal; if it
+    // throws, fall back to the lazy-cache-only path. Apps that don't read on
+    // resize still render correctly at whatever size was current on first read.
 }
 
 function _createReadStream(fd) {

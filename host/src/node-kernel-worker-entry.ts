@@ -235,6 +235,13 @@ function handleSpawn(msg: SpawnMessage) {
     if (msg.pty) {
       const ptyIdx = kernelWorker.setupPty(pid);
       ptyByPid.set(pid, ptyIdx);
+      // Apply initial winsize before the wasm program starts. Without this,
+      // the program's first TIOCGWINSZ returns the kernel default (80x24)
+      // and TUI renderers (ink, blessed) cache the wrong width before the
+      // post-spawn pty_resize lands, causing redraw corruption.
+      if (msg.ptyCols != null && msg.ptyRows != null) {
+        kernelWorker.ptySetWinsize(ptyIdx, msg.ptyRows, msg.ptyCols);
+      }
       kernelWorker.onPtyOutput(ptyIdx, (data: Uint8Array) => {
         post({ type: "pty_output", pid, data });
       });

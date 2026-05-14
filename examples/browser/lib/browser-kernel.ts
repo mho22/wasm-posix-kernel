@@ -229,7 +229,14 @@ export class BrowserKernel {
   async spawn(
     programBytes: ArrayBuffer,
     argv: string[],
-    options?: { env?: string[]; cwd?: string; stdin?: Uint8Array; pty?: boolean },
+    options?: {
+      env?: string[];
+      cwd?: string;
+      stdin?: Uint8Array;
+      pty?: boolean;
+      ptyCols?: number;
+      ptyRows?: number;
+    },
   ): Promise<number> {
     const pid = this.nextPid++;
     const requestId = this.nextRequestId++;
@@ -250,6 +257,8 @@ export class BrowserKernel {
       env: this.mergeEnv(options?.env ?? this.options.env),
       cwd: options?.cwd,
       pty: options?.pty,
+      ptyCols: options?.ptyCols,
+      ptyRows: options?.ptyRows,
       stdin: options?.stdin,
       maxPages: this.maxPages,
     }, [bytesToSend]);
