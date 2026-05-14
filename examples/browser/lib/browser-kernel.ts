@@ -388,6 +388,8 @@ export class BrowserKernel {
       stdin?: Uint8Array;
       pty?: boolean;
       onStarted?: (pid: number) => void | Promise<void>;
+      ptyCols?: number;
+      ptyRows?: number;
     },
   ): Promise<number> {
     const pid = this.nextPid++;
@@ -409,6 +411,8 @@ export class BrowserKernel {
       env: this.mergeEnv(options?.env ?? this.options.env),
       cwd: options?.cwd,
       pty: options?.pty,
+      ptyCols: options?.ptyCols,
+      ptyRows: options?.ptyRows,
       stdin: options?.stdin,
       maxPages: this.maxPages,
     }, [bytesToSend]);
