@@ -902,9 +902,28 @@ function _createWriteStream(fd) {
         cursorTo() { return true; },
         clearLine() { return true; },
         isTTY: os.isatty(fd),
-        columns: 80,
-        rows: 24,
     };
+    Object.defineProperties(s, {
+        // Live TIOCGWINSZ-backed accessors. TUIs (ink, blessed, pi-coding-agent)
+        // read these on every render; returning hardcoded 80×24 makes them draw
+        // at a fraction of the actual terminal width.
+        columns: {
+            get() {
+                const ws = os.ttyGetWinSize(fd);
+                return ws ? ws[0] : 80;
+            },
+            enumerable: true,
+            configurable: true,
+        },
+        rows: {
+            get() {
+                const ws = os.ttyGetWinSize(fd);
+                return ws ? ws[1] : 24;
+            },
+            enumerable: true,
+            configurable: true,
+        },
+    });
     if (fd === 1) _stdout = s;
     if (fd === 2) _stderr = s;
     return s;
