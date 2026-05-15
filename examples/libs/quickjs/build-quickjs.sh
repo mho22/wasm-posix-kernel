@@ -204,14 +204,22 @@ if [ ! -f "$OPENSSL_PREFIX/lib/libcrypto.a" ]; then
     exit 1
 fi
 
+ZLIB_PREFIX="$SCRIPT_DIR/../zlib/zlib-install"
+if [ ! -f "$ZLIB_PREFIX/lib/libz.a" ]; then
+    echo "ERROR: libz.a not found at $ZLIB_PREFIX/lib/. Run examples/libs/zlib/build-zlib.sh first."
+    exit 1
+fi
+
 NODE_NATIVE_SRCS=(
     "$SCRIPT_DIR/node-compat-native/node-native.c"
     "$SCRIPT_DIR/node-compat-native/hash.c"
     "$SCRIPT_DIR/node-compat-native/hmac.c"
+    "$SCRIPT_DIR/node-compat-native/zlib.c"
 )
 NODE_NATIVE_CFLAGS=(
     "${CFLAGS[@]}"
     -I"$OPENSSL_PREFIX/include"
+    -I"$ZLIB_PREFIX/include"
 )
 for src in "${NODE_NATIVE_SRCS[@]}"; do
     obj="$BIN_DIR/$(basename "${src%.c}.o")"
@@ -220,7 +228,10 @@ for src in "${NODE_NATIVE_SRCS[@]}"; do
 done
 
 echo "Linking node..."
-$CC "${NODE_OBJS[@]}" "${OBJS[@]}" "$OPENSSL_PREFIX/lib/libcrypto.a" -lm \
+$CC "${NODE_OBJS[@]}" "${OBJS[@]}" \
+    "$OPENSSL_PREFIX/lib/libcrypto.a" \
+    "$ZLIB_PREFIX/lib/libz.a" \
+    -lm \
     "${QJS_STACK_FLAGS[@]}" -o "$BIN_DIR/node.wasm"
 
 # Asyncify for fork support

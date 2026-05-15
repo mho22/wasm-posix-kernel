@@ -1718,7 +1718,7 @@ const stream = (() => {
     class Duplex extends Readable {
         constructor(options) {
             super(options);
-            Writable.call(this, options);
+            // Inline Writable's init — ES class constructors can't be .call()'d.
             this.writable = true;
             this._writableState = { ended: false };
             if (options && options.write) this._write = options.write;
@@ -2285,16 +2285,53 @@ const _builtinModules = {
     'net': net,
     'http': http,
     'https': http,  // alias (no TLS distinction in this env)
-    'zlib': {
-        createGzip() { return new stream.PassThrough(); },
-        createGunzip() { return new stream.PassThrough(); },
-        createDeflate() { return new stream.PassThrough(); },
-        createInflate() { return new stream.PassThrough(); },
-        gzipSync(buf) { return buf; },
-        gunzipSync(buf) { return buf; },
-        deflateSync(buf) { return buf; },
-        inflateSync(buf) { return buf; },
-    },
+    'zlib': (() => {
+        const z = _nodeNative;
+        const toU8 = (b) => {
+            if (b instanceof Uint8Array) return b;
+            if (b instanceof ArrayBuffer) return new Uint8Array(b);
+            if (typeof b === 'string') return Buffer.from(b, 'utf8');
+            throw new TypeError('zlib: input must be Buffer, Uint8Array, ArrayBuffer, or string');
+        };
+        // end() override: base Transform.end() never flushes — we have to
+        // feed Z_FINISH to libz ourselves and push(null) for end-of-stream.
+        class ZlibTransform extends stream.Transform {
+            constructor(inner, opts) {
+                super(opts);
+                this._inner = inner;
+            }
+            _transform(chunk, _enc, cb) {
+                try {
+                    const out = this._inner.write(toU8(chunk), false);
+                    cb(null, out.byteLength ? Buffer.from(out) : null);
+                } catch (e) { cb(e); }
+            }
+            end(chunk, encoding, cb) {
+                if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
+                if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+                if (chunk != null) this.write(chunk, encoding);
+                try {
+                    const out = this._inner.write(new Uint8Array(0), true);
+                    if (out.byteLength) this.push(Buffer.from(out));
+                } catch (e) { this.emit('error', e); }
+                this.push(null);
+                this._writableState.ended = true;
+                this.emit('finish');
+                if (cb) cb();
+                return this;
+            }
+        }
+        return {
+            createGzip:    (opts) => new ZlibTransform(z.createGzip(opts?.level), opts),
+            createGunzip:  (opts) => new ZlibTransform(z.createGunzip(), opts),
+            createDeflate: (opts) => new ZlibTransform(z.createDeflate(opts?.level), opts),
+            createInflate: (opts) => new ZlibTransform(z.createInflate(), opts),
+            gzipSync:    (b, opts) => Buffer.from(z.gzipSync(toU8(b), opts?.level)),
+            gunzipSync:  (b)       => Buffer.from(z.gunzipSync(toU8(b))),
+            deflateSync: (b, opts) => Buffer.from(z.deflateSync(toU8(b), opts?.level)),
+            inflateSync: (b)       => Buffer.from(z.inflateSync(toU8(b))),
+        };
+    })(),
     'tty': {
         isatty: os.isatty,
         ReadStream: class ReadStream extends stream.Readable {},
