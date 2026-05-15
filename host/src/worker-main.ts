@@ -458,6 +458,11 @@ function buildImportObject(
     }
   }
 
+  // llvm/lld ≥22 emit __c_longjmp as a tag import for setjmp users; instantiation fails silently without it.
+  if (moduleImports.some(i => i.module === "env" && i.name === "__c_longjmp" && i.kind === "tag")) {
+    envImports.__c_longjmp = new WebAssembly.Tag({ parameters: ["i32"] });
+  }
+
   // Add dlopen imports if provided
   if (dlopenImports) {
     Object.assign(envImports, dlopenImports);
