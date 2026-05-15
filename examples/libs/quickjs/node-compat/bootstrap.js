@@ -2157,29 +2157,111 @@ const crypto = (() => {
 // ============================================================
 
 const net = (() => {
+    const nat = _nodeNative;
+    const toU8 = (b) => {
+        if (b instanceof Uint8Array) return b;
+        if (b instanceof ArrayBuffer) return new Uint8Array(b);
+        if (typeof b === 'string') return Buffer.from(b, 'utf8');
+        throw new TypeError('socket: chunk must be Buffer, Uint8Array, ArrayBuffer, or string');
+    };
+
     class Socket extends stream.Duplex {
         constructor(options) {
             super(options);
+            this._fd = options?.fd ?? -1;
+            this._socketDestroyed = false;
+            this._reading = false;
+            this._writeQueue = [];
             this.connecting = false;
-            this.destroyed = false;
             this.remoteAddress = null;
             this.remotePort = null;
             this.localAddress = null;
             this.localPort = null;
         }
+
         connect(port, host, cb) {
-            if (typeof host === 'function') { cb = host; host = 'localhost'; }
+            if (typeof port === 'object' && port !== null) {
+                cb = host; host = port.host; port = port.port;
+            }
+            if (typeof host === 'function') { cb = host; host = undefined; }
+            host = host || 'localhost';
+            if (cb) this.once('connect', cb);
+
             this.connecting = true;
             this.remoteAddress = host;
             this.remotePort = port;
-            // TODO: implement actual socket connection via kernel
-            if (cb) this.once('connect', cb);
-            queueMicrotask(() => {
-                this.connecting = false;
-                this.emit('connect');
-            });
+
+            nat.socketConnect(host, port).then(
+                (fd) => {
+                    if (this._socketDestroyed) { nat.socketClose(fd); return; }
+                    this._fd = fd;
+                    this.connecting = false;
+                    this.emit('connect');
+                    this._scheduleRead();
+                    this._flushWriteQueue();
+                },
+                (err) => {
+                    this.connecting = false;
+                    this.destroy(err);
+                },
+            );
             return this;
         }
+
+        _scheduleRead() {
+            if (this._fd < 0 || this._socketDestroyed || this._reading) return;
+            this._reading = true;
+            nat.socketRead(this._fd, 64 * 1024).then(
+                (ab) => {
+                    this._reading = false;
+                    if (this._socketDestroyed) return;
+                    if (ab.byteLength === 0) {
+                        this.push(null); /* EOF — peer closed */
+                        return;
+                    }
+                    this.push(Buffer.from(ab));
+                    this._scheduleRead();
+                },
+                (err) => {
+                    this._reading = false;
+                    if (!this._socketDestroyed) this.destroy(err);
+                },
+            );
+        }
+
+        _read() { /* push happens proactively in _scheduleRead */ }
+
+        _write(chunk, _encoding, cb) {
+            const buf = toU8(chunk);
+            if (this._fd < 0) {
+                this._writeQueue.push({ buf, cb });
+                return;
+            }
+            nat.socketWrite(this._fd, buf).then(() => cb(null), cb);
+        }
+
+        _flushWriteQueue() {
+            const q = this._writeQueue;
+            this._writeQueue = [];
+            for (const { buf, cb } of q) {
+                nat.socketWrite(this._fd, buf).then(() => cb(null), cb);
+            }
+        }
+
+        destroy(err) {
+            if (this._socketDestroyed) return this;
+            this._socketDestroyed = true;
+            if (this._fd >= 0) {
+                nat.socketClose(this._fd);
+                this._fd = -1;
+            }
+            for (const { cb } of this._writeQueue) cb(err || new Error('socket destroyed'));
+            this._writeQueue = [];
+            if (err) this.emit('error', err);
+            this.emit('close', !!err);
+            return this;
+        }
+
         setEncoding(enc) { this._encoding = enc; return this; }
         setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
         setNoDelay() { return this; }
@@ -2189,6 +2271,7 @@ const net = (() => {
         unref() { return this; }
     }
 
+    /* Server is still a stub — Phase 3 ships client sockets only. */
     class Server extends events.EventEmitter {
         constructor(options, connectionListener) {
             super();

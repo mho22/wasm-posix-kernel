@@ -468,6 +468,9 @@ export class WasmPosixKernel {
         host_net_recv: (handle: number, bufPtr: bigint, bufLen: number, flags: number): number => {
           return this.hostNetRecv(handle, Number(bufPtr), bufLen, flags);
         },
+        host_net_connect_status: (handle: number): number => {
+          return this.hostNetConnectStatus(handle);
+        },
         host_net_close: (handle: number): number => {
           return this.hostNetClose(handle);
         },
@@ -1842,6 +1845,17 @@ export class WasmPosixKernel {
     }
   }
 
+  private hostNetConnectStatus(handle: number): number {
+    if (!this.io.network) return -107; // -ENOTCONN
+    try {
+      // Backend returns positive errno on failure; kernel expects negative.
+      const status = this.io.network.connectStatus(handle);
+      return status > 0 ? -status : status;
+    } catch {
+      return -107; // -ENOTCONN
+    }
+  }
+
   private hostNetSend(handle: number, bufPtr: number, bufLen: number, flags: number): number {
     if (!this.io.network) return -107; // -ENOTCONN
     try {
@@ -1895,7 +1909,8 @@ export class WasmPosixKernel {
       if (addr.length > resultLen) return -22; // -EINVAL
       mem.set(addr, resultPtr);
       return addr.length;
-    } catch {
+    } catch (e: any) {
+      if (e?.errno === 11) return -11; // -EAGAIN — kernel-worker retries
       return -2; // -ENOENT
     }
   }

@@ -4728,7 +4728,16 @@ pub fn sys_getsockopt(
                 SocketDomain::Inet => AF_INET,
                 SocketDomain::Inet6 => AF_INET6,
             }),
-            SO_ERROR => Ok(0),
+            // Linux semantics: return cached errno and clear it.
+            SO_ERROR => {
+                let err = sock.connect_error;
+                if err != 0 {
+                    if let Some(s) = proc.sockets.get_mut(sock_idx) {
+                        s.connect_error = 0;
+                    }
+                }
+                Ok(err)
+            }
             SO_ACCEPTCONN => Ok(if sock.state == SocketState::Listening { 1 } else { 0 }),
             SO_RCVBUF | SO_SNDBUF => Ok(DEFAULT_PIPE_CAPACITY as u32),
             SO_REUSEADDR | SO_KEEPALIVE |
@@ -5232,13 +5241,32 @@ pub fn sys_connect(proc: &mut Process, host: &mut dyn HostIO, fd: i32, addr: &[u
 
                 Ok(())
             } else {
-                // External connection: delegate to host
+                // External connection: two-phase. First call kicks off the
+                // async host-side connect; subsequent calls (driven by the
+                // userspace poll/getsockopt loop) query host_net_connect_status
+                // until the TCP handshake either completes or errors. EAGAIN
+                // surfaces while still in flight.
                 let net_handle = sock_idx as i32;
-                host.host_net_connect(net_handle, &ip, port)?;
-                let sock = proc.sockets.get_mut(sock_idx).ok_or(Errno::EBADF)?;
-                sock.state = SocketState::Connected;
-                sock.host_net_handle = Some(net_handle);
-                Ok(())
+                if sock.state != SocketState::Connecting {
+                    host.host_net_connect(net_handle, &ip, port)?;
+                    let sock = proc.sockets.get_mut(sock_idx).ok_or(Errno::EBADF)?;
+                    sock.state = SocketState::Connecting;
+                    sock.host_net_handle = Some(net_handle);
+                }
+                match host.host_net_connect_status(net_handle) {
+                    Ok(()) => {
+                        let sock = proc.sockets.get_mut(sock_idx).ok_or(Errno::EBADF)?;
+                        sock.state = SocketState::Connected;
+                        Ok(())
+                    }
+                    Err(Errno::EAGAIN) => Err(Errno::EAGAIN),
+                    Err(e) => {
+                        let sock = proc.sockets.get_mut(sock_idx).ok_or(Errno::EBADF)?;
+                        sock.state = SocketState::Closed;
+                        sock.connect_error = e as u32;
+                        Err(e)
+                    }
+                }
             }
         }
         SocketDomain::Unix => {
@@ -5481,7 +5509,7 @@ pub fn sys_poll(
     timeout_ms: i32,
 ) -> Result<i32, Errno> {
     // First non-blocking check
-    let ready = poll_check(proc, fds);
+    let ready = poll_check(proc, host, fds);
     if ready > 0 || timeout_ms == 0 {
         return Ok(ready);
     }
@@ -5512,7 +5540,7 @@ pub fn sys_poll(
         // Sleep 1ms
         let _ = host.host_nanosleep(0, 1_000_000);
 
-        let ready = poll_check(proc, fds);
+        let ready = poll_check(proc, host, fds);
         if ready > 0 {
             return Ok(ready);
         }
@@ -5529,7 +5557,7 @@ pub fn sys_poll(
 }
 
 /// Single non-blocking pass checking fd readiness. Used by sys_poll's loop.
-fn poll_check(proc: &mut Process, fds: &mut [WasmPollFd]) -> i32 {
+fn poll_check(proc: &mut Process, host: &mut dyn HostIO, fds: &mut [WasmPollFd]) -> i32 {
     use wasm_posix_shared::poll::*;
 
     let mut ready_count = 0i32;
@@ -5746,23 +5774,55 @@ fn poll_check(proc: &mut Process, fds: &mut [WasmPollFd]) -> i32 {
                             }
                         }
                     }
-                    // Host-delegated external socket (no pipe buffers): report
-                    // ready for requested events. The kernel can't see async
-                    // host state (e.g. pending fetch), so we always report ready.
-                    // If recv has no data yet, host_net_recv returns EAGAIN;
-                    // non-blocking FDs get EAGAIN back immediately, and the
-                    // program's poll loop retries — each iteration yields to the
-                    // JS event loop, allowing the async fetch to complete.
+                    // Host-delegated external socket (no pipe buffers).
+                    // Connected: always report ready — the kernel can't see
+                    // async host state, so we wake userspace each round and
+                    // host_net_recv returns EAGAIN if no data is buffered yet.
+                    // Connecting: query host_net_connect_status; only report
+                    // POLLOUT once the TCP handshake actually completes
+                    // (success → Connected, failure → Closed + cache errno
+                    // for SO_ERROR + POLLERR).
                     if sock.host_net_handle.is_some()
                         && sock.recv_buf_idx.is_none()
                         && sock.send_buf_idx.is_none()
-                        && sock.state == SocketState::Connected
                     {
-                        if pollfd.events & POLLOUT != 0 {
-                            revents |= POLLOUT;
-                        }
-                        if pollfd.events & POLLIN != 0 {
-                            revents |= POLLIN;
+                        match sock.state {
+                            SocketState::Connected => {
+                                if pollfd.events & POLLOUT != 0 {
+                                    revents |= POLLOUT;
+                                }
+                                if pollfd.events & POLLIN != 0 {
+                                    revents |= POLLIN;
+                                }
+                            }
+                            SocketState::Connecting => {
+                                let net_handle = sock.host_net_handle.unwrap();
+                                match host.host_net_connect_status(net_handle) {
+                                    Ok(()) => {
+                                        if let Some(s) = proc.sockets.get_mut(sock_idx) {
+                                            s.state = SocketState::Connected;
+                                        }
+                                        if pollfd.events & POLLOUT != 0 {
+                                            revents |= POLLOUT;
+                                        }
+                                        if pollfd.events & POLLIN != 0 {
+                                            revents |= POLLIN;
+                                        }
+                                    }
+                                    Err(Errno::EAGAIN) => {}
+                                    Err(e) => {
+                                        if let Some(s) = proc.sockets.get_mut(sock_idx) {
+                                            s.state = SocketState::Closed;
+                                            s.connect_error = e as u32;
+                                        }
+                                        revents |= POLLERR;
+                                        if pollfd.events & POLLOUT != 0 {
+                                            revents |= POLLOUT;
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -8013,7 +8073,7 @@ pub fn sys_select(
         if want_except { events |= POLLPRI; }
 
         let mut pollfd = WasmPollFd { fd: fd as i32, events, revents: 0 };
-        poll_check(proc, core::slice::from_mut(&mut pollfd));
+        poll_check(proc, host, core::slice::from_mut(&mut pollfd));
 
         let revents = pollfd.revents;
         let mut counted = false;
@@ -8081,7 +8141,7 @@ pub fn sys_select(
             if want_read { pollfd.events |= POLLIN; }
             if want_write { pollfd.events |= POLLOUT; }
             if want_except { pollfd.events |= POLLPRI; }
-            poll_check(proc, core::slice::from_mut(&mut pollfd));
+            poll_check(proc, host, core::slice::from_mut(&mut pollfd));
 
             let revents = pollfd.revents;
             let mut counted = false;
@@ -8811,6 +8871,9 @@ mod tests {
             Err(Errno::ECHILD)
         }
         fn host_net_connect(&mut self, _handle: i32, _addr: &[u8], _port: u16) -> Result<(), Errno> {
+            Err(Errno::ECONNREFUSED)
+        }
+        fn host_net_connect_status(&mut self, _handle: i32) -> Result<(), Errno> {
             Err(Errno::ECONNREFUSED)
         }
         fn host_net_send(&mut self, _handle: i32, _data: &[u8], _flags: u32) -> Result<usize, Errno> {
@@ -12638,6 +12701,9 @@ mod tests {
         fn host_net_connect(&mut self, _handle: i32, _addr: &[u8], _port: u16) -> Result<(), Errno> {
             Err(Errno::ECONNREFUSED)
         }
+        fn host_net_connect_status(&mut self, _handle: i32) -> Result<(), Errno> {
+            Err(Errno::ECONNREFUSED)
+        }
         fn host_net_send(&mut self, _handle: i32, _data: &[u8], _flags: u32) -> Result<usize, Errno> {
             Err(Errno::ENOTCONN)
         }
@@ -13161,6 +13227,7 @@ mod tests {
             fn host_utimensat(&mut self, _p: &[u8], _as: i64, _an: i64, _ms: i64, _mn: i64) -> Result<(), Errno> { Ok(()) }
             fn host_waitpid(&mut self, _p: i32, _o: u32) -> Result<(i32, i32), Errno> { Err(Errno::ECHILD) }
             fn host_net_connect(&mut self, _h: i32, _a: &[u8], _p: u16) -> Result<(), Errno> { Ok(()) }
+            fn host_net_connect_status(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }
             fn host_net_send(&mut self, _h: i32, data: &[u8], _f: u32) -> Result<usize, Errno> { Ok(data.len()) }
             fn host_net_recv(&mut self, _h: i32, _l: u32, _f: u32, _b: &mut [u8]) -> Result<usize, Errno> { Ok(0) }
             fn host_net_close(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }
@@ -14822,6 +14889,7 @@ mod tests {
             fn host_utimensat(&mut self, _p: &[u8], _as: i64, _an: i64, _ms: i64, _mn: i64) -> Result<(), Errno> { Ok(()) }
             fn host_waitpid(&mut self, _p: i32, _o: u32) -> Result<(i32, i32), Errno> { Err(Errno::ECHILD) }
             fn host_net_connect(&mut self, _h: i32, _a: &[u8], _p: u16) -> Result<(), Errno> { Ok(()) }
+            fn host_net_connect_status(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }
             fn host_net_send(&mut self, _h: i32, data: &[u8], _f: u32) -> Result<usize, Errno> { Ok(data.len()) }
             fn host_net_recv(&mut self, _h: i32, _l: u32, _f: u32, _b: &mut [u8]) -> Result<usize, Errno> { Ok(0) }
             fn host_net_close(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }
@@ -14908,6 +14976,7 @@ mod tests {
             fn host_utimensat(&mut self, _p: &[u8], _as: i64, _an: i64, _ms: i64, _mn: i64) -> Result<(), Errno> { Ok(()) }
             fn host_waitpid(&mut self, _p: i32, _o: u32) -> Result<(i32, i32), Errno> { Err(Errno::ECHILD) }
             fn host_net_connect(&mut self, _h: i32, _a: &[u8], _p: u16) -> Result<(), Errno> { Ok(()) }
+            fn host_net_connect_status(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }
             fn host_net_send(&mut self, _h: i32, data: &[u8], _f: u32) -> Result<usize, Errno> { Ok(data.len()) }
             fn host_net_recv(&mut self, _h: i32, _l: u32, _f: u32, _b: &mut [u8]) -> Result<usize, Errno> { Ok(0) }
             fn host_net_close(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }
@@ -15003,6 +15072,7 @@ mod tests {
             fn host_utimensat(&mut self, _p: &[u8], _as: i64, _an: i64, _ms: i64, _mn: i64) -> Result<(), Errno> { Ok(()) }
             fn host_waitpid(&mut self, _p: i32, _o: u32) -> Result<(i32, i32), Errno> { Err(Errno::ECHILD) }
             fn host_net_connect(&mut self, _h: i32, _a: &[u8], _p: u16) -> Result<(), Errno> { Ok(()) }
+            fn host_net_connect_status(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }
             fn host_net_send(&mut self, _h: i32, data: &[u8], _f: u32) -> Result<usize, Errno> { Ok(data.len()) }
             fn host_net_recv(&mut self, _h: i32, _l: u32, _f: u32, _b: &mut [u8]) -> Result<usize, Errno> { Ok(0) }
             fn host_net_close(&mut self, _h: i32) -> Result<(), Errno> { Ok(()) }

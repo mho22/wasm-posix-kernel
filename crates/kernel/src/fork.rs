@@ -479,6 +479,8 @@ pub fn serialize_fork_state(proc: &Process, buf: &mut [u8]) -> Result<usize, Err
                     SocketState::Listening => 2,
                     SocketState::Connected => 3,
                     SocketState::Closed => 4,
+                    // The live host net.Socket can't cross fork.
+                    SocketState::Connecting => 4,
                 })?;
                 // peer_idx, recv_buf_idx, send_buf_idx as Option<u32> (0xFFFFFFFF = None)
                 w.write_u32(sock.peer_idx.map(|v| v as u32).unwrap_or(0xFFFFFFFF))?;

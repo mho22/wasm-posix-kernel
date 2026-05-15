@@ -4,6 +4,7 @@
 #include "hash.h"
 #include "hmac.h"
 #include "zlib.h"
+#include "socket.h"
 
 static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("createHash", 1, js_node_native_create_hash),
@@ -16,6 +17,10 @@ static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("inflateSync", 1, js_node_native_inflate_sync),
     JS_CFUNC_DEF("gzipSync", 2, js_node_native_gzip_sync),
     JS_CFUNC_DEF("gunzipSync", 1, js_node_native_gunzip_sync),
+    JS_CFUNC_DEF("socketConnect", 2, js_node_native_socket_connect),
+    JS_CFUNC_DEF("socketRead", 2, js_node_native_socket_read),
+    JS_CFUNC_DEF("socketWrite", 2, js_node_native_socket_write),
+    JS_CFUNC_DEF("socketClose", 1, js_node_native_socket_close),
 };
 
 static int node_native_module_init(JSContext *ctx, JSModuleDef *m)
