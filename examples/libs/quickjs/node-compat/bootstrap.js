@@ -302,6 +302,8 @@ const path = (() => {
     };
 })();
 path.posix = path;
+// tar/cacache/minimatch read `path.win32.{sep,parse,isAbsolute}` at module init.
+path.win32 = { ...path, sep: '\\' };
 
 // ============================================================
 // events module (EventEmitter)
@@ -337,9 +339,7 @@ const events = (() => {
             return true;
         }
 
-        on(event, fn) { return this.addListener(event, fn); }
-
-        addListener(event, fn) {
+        on(event, fn) {
             if (!this._events[event]) this._events[event] = [];
             this._events[event].push({ fn, once: false });
             return this;
@@ -351,14 +351,12 @@ const events = (() => {
             return this;
         }
 
-        removeListener(event, fn) {
+        off(event, fn) {
             const list = this._events[event];
             if (!list) return this;
             this._events[event] = list.filter(l => l.fn !== fn);
             return this;
         }
-
-        off(event, fn) { return this.removeListener(event, fn); }
 
         removeAllListeners(event) {
             if (event) {
@@ -398,10 +396,18 @@ const events = (() => {
         }
     }
 
-    const mod = function() { return new EventEmitter(); };
-    mod.EventEmitter = EventEmitter;
-    mod.defaultMaxListeners = 10;
-    mod.once = function(emitter, event) {
+    // addListener/removeListener share function references with on/off so that
+    // Minipass overriding one half and calling super.<other-half> dispatches to
+    // the same body — `this.<half>` aliasing would infinite-loop.
+    EventEmitter.prototype.addListener = EventEmitter.prototype.on;
+    EventEmitter.prototype.removeListener = EventEmitter.prototype.off;
+
+    // require('events') returns the EventEmitter class itself (Node compat).
+    // Subclassing via `class Foo extends require('events')` only works if the
+    // export IS the class — extending a function that returns `new EE()` makes
+    // super() override `this`, leaving derived methods on an unused prototype.
+    EventEmitter.EventEmitter = EventEmitter;
+    EventEmitter.once = function(emitter, event) {
         return new Promise((resolve, reject) => {
             const onEvent = (...args) => {
                 emitter.removeListener('error', onError);
@@ -415,7 +421,7 @@ const events = (() => {
             if (event !== 'error') emitter.once('error', onError);
         });
     };
-    return mod;
+    return EventEmitter;
 })();
 
 // ============================================================
@@ -791,6 +797,11 @@ const process = (() => {
         config: { variables: {} },
         release: { name: 'node' },
         moduleLoadList: [],
+        // npm-install-checks reads `process.report.getReport().sharedObjects`
+        // to detect glibc-vs-musl when /usr/bin/ldd is unavailable.
+        report: {
+            getReport() { return { sharedObjects: ['/lib/ld-musl-wasm32.so.1'] }; },
+        },
     });
 
     // Define stdout/stderr/stdin as lazy getters (can't be in Object.assign
@@ -822,8 +833,9 @@ function _createWriteStream(fd) {
         write(data, encoding, cb) {
             if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
             if (typeof data === 'string') {
-                std.out.puts(data);
-                std.out.flush();
+                const sink = fd === 2 ? std.err : std.out;
+                sink.puts(data);
+                sink.flush();
             } else if (data instanceof Uint8Array) {
                 os.write(fd, data.buffer, data.byteOffset, data.byteLength);
             }
@@ -838,6 +850,11 @@ function _createWriteStream(fd) {
         once() { return s; },
         emit() { return false; },
         removeListener() { return s; },
+        // tty.WriteStream cursor/line no-ops. npm's progress spinner calls
+        // cursorTo(0) and clearLine(1) unconditionally even when the fd
+        // isn't a tty.
+        cursorTo() { return true; },
+        clearLine() { return true; },
         isTTY: os.isatty(fd),
         columns: 80,
         rows: 24,
@@ -1088,6 +1105,39 @@ const fs = (() => {
         if (err !== 0) _throwErrno(-err, 'rmdir', p);
     }
 
+    // fs.rm: cacache cleans tmp dirs after content writes; tar uses it too.
+    // force=true silences ENOENT.
+    function rmSync(targetPath, options) {
+        const opts = options || {};
+        const recursive = opts.recursive === true;
+        const force = opts.force === true;
+        const p = _pathToString(targetPath);
+        const [st, statErr] = os.lstat(p);
+        if (statErr !== 0) {
+            if (force) return;
+            _throwErrno(statErr, 'lstat', p);
+        }
+        const isDir = (st.mode & constants.S_IFMT) === constants.S_IFDIR;
+        const isSymlink = (st.mode & constants.S_IFMT) === constants.S_IFLNK;
+        if (isDir && !isSymlink) {
+            if (recursive) {
+                const [entries, dirErr] = os.readdir(p);
+                if (dirErr === 0) {
+                    for (const name of entries) {
+                        if (name === '.' || name === '..') continue;
+                        const child = p.endsWith('/') ? p + name : p + '/' + name;
+                        rmSync(child, opts);
+                    }
+                }
+            }
+            const err = os.remove(p);
+            if (err !== 0 && !force) _throwErrno(err < 0 ? -err : err, 'rmdir', p);
+        } else {
+            const err = os.remove(p);
+            if (err !== 0 && !force) _throwErrno(err < 0 ? -err : err, 'unlink', p);
+        }
+    }
+
     function unlinkSync(filepath) {
         const p = _pathToString(filepath);
         const err = os.remove(p);
@@ -1199,6 +1249,19 @@ const fs = (() => {
         return os.write(fd, buf.buffer, 0, buf.length);
     }
 
+    // fs-minipass guards on `if (!fs.writev)` and falls back to
+    // `process.binding('fs')` (unimplemented here) when absent.
+    function writevSync(fd, buffers, position) {
+        let total = 0;
+        for (const buf of buffers) {
+            const len = buf.byteLength ?? buf.length;
+            if (!len) continue;
+            const pos = position == null ? null : position + total;
+            total += writeSync(fd, buf, 0, len, pos);
+        }
+        return total;
+    }
+
     function fstatSync(fd) {
         // Use /proc/self/fd approach or direct syscall
         // For simplicity, use a basic approach
@@ -1245,7 +1308,7 @@ const fs = (() => {
         readdirSync,
         mkdirSync,
         rmdirSync,
-        rmSync: rmdirSync,
+        rmSync,
         unlinkSync,
         renameSync,
         copyFileSync,
@@ -1261,6 +1324,16 @@ const fs = (() => {
         closeSync,
         readSync,
         writeSync,
+        writevSync,
+        writev(fd, buffers, position, cb) {
+            if (typeof position === 'function') { cb = position; position = null; }
+            try {
+                const n = writevSync(fd, buffers, position);
+                queueMicrotask(() => cb(null, n, buffers));
+            } catch (err) {
+                queueMicrotask(() => cb(err));
+            }
+        },
         fstatSync,
         mkdtempSync,
 
@@ -1280,6 +1353,7 @@ const fs = (() => {
         stat: _asyncify(statSync),
         lstat: _asyncify(lstatSync),
         access: _asyncify(accessSync),
+        rm: _asyncify(rmSync),
         exists(filepath, cb) {
             cb(existsSync(filepath));
         },
@@ -1550,8 +1624,14 @@ const util = (() => {
         isUint8Array(v) { return v instanceof Uint8Array; },
     };
 
+    // Node's util.formatWithOptions(opts, ...args). Our inspect() ignores
+    // the options bag (no color/depth knobs yet) so this is just format()
+    // with the leading options dropped — npm's lib/utils/format.js is the
+    // primary caller.
+    function formatWithOptions(_opts, ...args) { return format(...args); }
+
     return {
-        format, inspect, inherits, deprecate, promisify, callbackify,
+        format, formatWithOptions, inspect, inherits, deprecate, promisify, callbackify,
         isDeepStrictEqual, types,
         TextDecoder, TextEncoder,
         // Deprecated but widely used
@@ -1664,25 +1744,53 @@ const stream = (() => {
         constructor(options) {
             super();
             this.readable = true;
-            this._readableState = { ended: false, flowing: null, buffer: [] };
+            this._readableState = { ended: false, flowing: null, buffer: [], endPending: false };
             if (options && options.read) this._read = options.read;
         }
         _read(size) {}
+        // Buffer until a consumer attaches: pipelines that wire up the data
+        // listener one microtask later (minipass-fetch's gzip decoder)
+        // otherwise drop chunks pushed synchronously from the parser.
         push(chunk) {
             if (chunk === null) {
-                this._readableState.ended = true;
-                this.emit('end');
+                if (this._readableState.flowing || this.listenerCount('end') > 0
+                    || this._readableState.buffer.length === 0) {
+                    this._readableState.ended = true;
+                    this.emit('end');
+                } else {
+                    this._readableState.endPending = true;
+                }
                 return false;
             }
-            this._readableState.buffer.push(chunk);
-            this.emit('data', chunk);
+            if (this._readableState.flowing || this.listenerCount('data') > 0) {
+                this._readableState.flowing = true;
+                this.emit('data', chunk);
+            } else {
+                this._readableState.buffer.push(chunk);
+            }
             return true;
         }
         read(size) {
             if (this._readableState.buffer.length === 0) return null;
             return this._readableState.buffer.shift();
         }
-        resume() { this._readableState.flowing = true; return this; }
+        _drain() {
+            this._readableState.flowing = true;
+            const buf = this._readableState.buffer;
+            this._readableState.buffer = [];
+            for (const c of buf) this.emit('data', c);
+            if (this._readableState.endPending) {
+                this._readableState.endPending = false;
+                this._readableState.ended = true;
+                this.emit('end');
+            }
+        }
+        _maybeDrain(event) {
+            if (event === 'data' && this._readableState.buffer.length > 0) this._drain();
+        }
+        on(event, fn) { const r = super.on(event, fn); this._maybeDrain(event); return r; }
+        addListener(event, fn) { const r = super.addListener(event, fn); this._maybeDrain(event); return r; }
+        resume() { this._drain(); return this; }
         pause() { this._readableState.flowing = false; return this; }
         destroy() { this.emit('close'); return this; }
     }
@@ -1749,13 +1857,13 @@ const stream = (() => {
         _transform(chunk, encoding, cb) { cb(null, chunk); }
     }
 
-    return {
+    // `class X extends require('stream')` (Minipass) needs the export to be
+    // a constructor, so attach helpers onto Stream itself.
+    Object.assign(Stream, {
         Stream, Readable, Writable, Duplex, Transform, PassThrough,
         pipeline(...streams) {
             const cb = typeof streams[streams.length - 1] === 'function' ? streams.pop() : null;
-            for (let i = 0; i < streams.length - 1; i++) {
-                streams[i].pipe(streams[i + 1]);
-            }
+            for (let i = 0; i < streams.length - 1; i++) streams[i].pipe(streams[i + 1]);
             if (cb) {
                 const last = streams[streams.length - 1];
                 last.on('finish', () => cb(null));
@@ -1775,7 +1883,8 @@ const stream = (() => {
             stream.on('finish', onEnd);
             stream.on('error', onError);
         },
-    };
+    });
+    return Stream;
 })();
 
 // ============================================================
@@ -1784,6 +1893,9 @@ const stream = (() => {
 
 const url = (() => {
     function parse(urlStr, parseQueryString) {
+        // `new URL(URL_instance)` is valid in WHATWG; coerce to string so the
+        // regex-based scanner doesn't throw "match is not a function".
+        if (typeof urlStr !== 'string') urlStr = String(urlStr);
         // Simple URL parser
         const result = {
             protocol: null, slashes: false, auth: null, host: null,
@@ -1882,34 +1994,51 @@ const url = (() => {
         return format(result);
     }
 
-    return {
-        parse, format, resolve,
-        URL: globalThis.URL || class URL {
-            constructor(input, base) {
-                const parsed = parse(base ? resolve(base, input) : input);
-                Object.assign(this, parsed);
-            }
-        },
-        URLSearchParams: globalThis.URLSearchParams || class URLSearchParams {
-            constructor(init) {
-                this._params = {};
-                if (typeof init === 'string') {
-                    const qs = init.startsWith('?') ? init.slice(1) : init;
+    const SearchParamsClass = class URLSearchParams {
+        constructor(init) {
+            this._params = {};
+            if (typeof init === 'string') {
+                const qs = init.startsWith('?') ? init.slice(1) : init;
+                if (qs) {
                     for (const pair of qs.split('&')) {
                         const [k, v] = pair.split('=').map(decodeURIComponent);
                         this._params[k] = v;
                     }
                 }
             }
-            get(key) { return this._params[key]; }
-            set(key, val) { this._params[key] = val; }
-            has(key) { return key in this._params; }
-            toString() {
-                return Object.entries(this._params)
-                    .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
-                    .join('&');
+        }
+        get(key) { return this._params[key]; }
+        set(key, val) { this._params[key] = val; }
+        has(key) { return key in this._params; }
+        toString() {
+            return Object.entries(this._params)
+                .map(([k, v]) => encodeURIComponent(k) + '=' + encodeURIComponent(v))
+                .join('&');
+        }
+    };
+    const URLClass = class URL {
+        constructor(input, base) {
+            const parsed = parse(base ? resolve(base, input) : input);
+            // hosted-git-info wraps `new URL(...)` in try/catch and falls back
+            // when the first attempt is invalid; without throwing on missing
+            // protocol, the fallback never runs and downstream code reads a
+            // null hostname.
+            if (!parsed.protocol) throw new TypeError(`Invalid URL: ${input}`);
+            Object.assign(this, parsed);
+            // WHATWG URL: missing components are '' not null. minipass-fetch
+            // builds `path = pathname + search` via template literal, which
+            // turns null into the literal string "null".
+            for (const k of ['search', 'port', 'hostname', 'host']) {
+                if (this[k] == null) this[k] = '';
             }
-        },
+            this.searchParams = new SearchParamsClass(this.search ? this.search.slice(1) : '');
+        }
+        toString() { return format(this); }
+    };
+    return {
+        parse, format, resolve,
+        URL: URLClass,
+        URLSearchParams: SearchParamsClass,
     };
 })();
 
@@ -1986,21 +2115,39 @@ const string_decoder = (() => {
 // ============================================================
 
 const timers = (() => {
-    // QuickJS has os.setTimeout
+    // js_std_add_helpers installs setTimeout/setInterval that return a raw
+    // int64 timer id. Node returns an object with .unref(); npm's Display
+    // calls .unref() on its spinner timeout, so wrap the id in an object.
+    // clearAny() unwraps _id when the wrapper is passed back to clear*().
+    const wrap = (id) => ({ _id: id, unref() { return this; } });
+    const clearAny = (t) => {
+        if (t == null) return;
+        os.clearTimeout(typeof t === 'object' ? t._id : t);
+    };
     return {
-        setTimeout: globalThis.setTimeout || ((fn, ms, ...args) => os.setTimeout(() => fn(...args), ms || 0)),
-        clearTimeout: globalThis.clearTimeout || os.clearTimeout,
-        setInterval: globalThis.setInterval || ((fn, ms, ...args) => {
-            let id;
-            const repeat = () => { fn(...args); id = os.setTimeout(repeat, ms || 0); };
-            id = os.setTimeout(repeat, ms || 0);
-            return id;
-        }),
-        clearInterval: globalThis.clearInterval || os.clearTimeout,
-        setImmediate: globalThis.setImmediate || ((fn, ...args) => os.setTimeout(() => fn(...args), 0)),
-        clearImmediate: globalThis.clearImmediate || os.clearTimeout,
+        setTimeout: (fn, ms, ...args) =>
+            wrap(os.setTimeout(() => fn(...args), ms || 0)),
+        clearTimeout: clearAny,
+        setInterval: (fn, ms, ...args) => {
+            // _id is rewritten on every tick so the latest live id is what
+            // clearInterval cancels.
+            const t = wrap(0);
+            const tick = () => { fn(...args); t._id = os.setTimeout(tick, ms || 0); };
+            t._id = os.setTimeout(tick, ms || 0);
+            return t;
+        },
+        clearInterval: clearAny,
+        setImmediate: (fn, ...args) =>
+            wrap(os.setTimeout(() => fn(...args), 0)),
+        clearImmediate: clearAny,
     };
 })();
+
+// `timers/promises` — @npmcli/agent uses `setTimeout(ms)` as a connection-timeout
+// race against the connect promise. AbortSignal handling isn't needed for that.
+const timersPromises = {
+    setTimeout: (delay, value) => new Promise(r => os.setTimeout(() => r(value), delay || 0)),
+};
 
 // ============================================================
 // child_process module
@@ -2756,7 +2903,9 @@ function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
             this.method = (opts.method || 'GET').toUpperCase();
             this.path = opts.path || '/';
             this._host = opts.hostname || opts.host || 'localhost';
-            this._port = opts.port != null ? parseInt(opts.port, 10) : defaultPort;
+            // WHATWG URL gives `port = ''` when default; treat that like missing.
+            this._port = (opts.port != null && opts.port !== '')
+                ? parseInt(opts.port, 10) : defaultPort;
             this._protocol = (opts.protocol || protoLower).toLowerCase();
             // Header storage: case-insensitive lookup, original-case serialization.
             this._headerNames = Object.create(null); // lower -> original
@@ -3025,6 +3174,7 @@ const _builtinModules = {
     'events': events,
     'buffer': { Buffer },
     'fs': fs,
+    'fs/promises': fs.promises,
     'os': nodeOs,
     'util': util,
     'assert': assert,
@@ -3034,6 +3184,10 @@ const _builtinModules = {
     'querystring': querystring,
     'string_decoder': string_decoder,
     'timers': timers,
+    'timers/promises': timersPromises,
+    // @sigstore/sign reads http2.constants at module init but fetches over
+    // make-fetch-happen (http/1) — empty stub satisfies the load.
+    'http2': { constants: {} },
     'child_process': child_process,
     'crypto': crypto,
     'net': net,
@@ -3054,6 +3208,15 @@ const _builtinModules = {
             constructor(inner, opts) {
                 super(opts);
                 this._inner = inner;
+                // minizlib (vendored by minipass-fetch) treats our zlib as
+                // Node's native handle and pokes _handle/_processChunk/close.
+                this._handle = { close: () => {} };
+            }
+            close() {}
+            _processChunk(chunk, _flushFlag) {
+                const u8 = toU8(chunk);
+                const out = this._inner.write(u8, _flushFlag === 4 /* Z_FINISH */);
+                return out.byteLength ? Buffer.from(out) : Buffer.alloc(0);
             }
             _transform(chunk, _enc, cb) {
                 try {
@@ -3076,15 +3239,19 @@ const _builtinModules = {
                 return this;
             }
         }
+        // minipass-fetch / tar instantiate via `new zlib.Gunzip()` / `new zlib.Unzip()`.
+        class Gunzip extends ZlibTransform { constructor(opts) { super(z.createGunzip(), opts); } }
+        class Unzip extends ZlibTransform { constructor(opts) { super(z.createGunzip(), opts); } }
         return {
             createGzip:    (opts) => new ZlibTransform(z.createGzip(opts?.level), opts),
-            createGunzip:  (opts) => new ZlibTransform(z.createGunzip(), opts),
+            createGunzip:  (opts) => new Gunzip(opts),
             createDeflate: (opts) => new ZlibTransform(z.createDeflate(opts?.level), opts),
             createInflate: (opts) => new ZlibTransform(z.createInflate(), opts),
             gzipSync:    (b, opts) => Buffer.from(z.gzipSync(toU8(b), opts?.level)),
             gunzipSync:  (b)       => Buffer.from(z.gunzipSync(toU8(b))),
             deflateSync: (b, opts) => Buffer.from(z.deflateSync(toU8(b), opts?.level)),
             inflateSync: (b)       => Buffer.from(z.inflateSync(toU8(b))),
+            Gunzip, Unzip,
         };
     })(),
     'tty': {
@@ -3138,7 +3305,11 @@ const _builtinModules = {
         isWorker: false,
     },
     'v8': {
-        getHeapStatistics() { return { total_heap_size: 0, used_heap_size: 0 }; },
+        // arborist sizes its packument LRU as floor(heap_size_limit * 0.25),
+        // so heap_size_limit must be > 0 or lru-cache rejects the config.
+        getHeapStatistics() {
+            return { heap_size_limit: 256 * 1024 * 1024 };
+        },
     },
     'vm': {
         runInThisContext(code) { return eval(code); },
@@ -3162,61 +3333,91 @@ const Module = {
 };
 _builtinModules['module'] = Module;
 
-function _resolveFile(id, basedir) {
-    // Try exact path, then with extensions
-    const candidates = [id];
-    if (!id.endsWith('.js') && !id.endsWith('.json') && !id.endsWith('.mjs') && !id.endsWith('.cjs')) {
-        candidates.push(id + '.js', id + '.json');
-    }
-    // Try as directory (index.js)
-    candidates.push(id + '/index.js', id + '/index.json');
+// `require('process')` and `import 'node:process'` both return the same
+// global. Node ships this as a real builtin module; npm's chalk dependency
+// (via its vendored supports-color) does `import process from 'node:process'`.
+_builtinModules['process'] = process;
 
-    for (const candidate of candidates) {
-        let fullPath;
-        if (candidate.startsWith('/')) {
-            fullPath = candidate;
-        } else {
-            fullPath = basedir + '/' + candidate;
-        }
-        fullPath = path.normalize(fullPath);
-        const [, err] = os.stat(fullPath);
-        if (err === 0) return fullPath;
-    }
+// Mode bits for stat(): S_IFDIR / S_IFREG match os.stat() return mode field.
+function _isDir(p) {
+    const [st, err] = os.stat(p);
+    return err === 0 && (st.mode & 0o170000) === 0o40000;
+}
+function _isReg(p) {
+    const [st, err] = os.stat(p);
+    return err === 0 && (st.mode & 0o170000) === 0o100000;
+}
 
-    // Try node_modules
-    let dir = basedir;
-    while (dir !== '/') {
-        const nmDir = dir + '/node_modules/' + id;
-        for (const ext of ['', '.js', '.json', '/index.js', '/package.json']) {
-            const fullPath = nmDir + ext;
-            const [, err] = os.stat(fullPath);
-            if (err === 0) {
-                if (ext === '/package.json') {
-                    // Read package.json to find main
-                    try {
-                        const pkg = JSON.parse(std.loadFile(fullPath));
-                        const main = pkg.main || 'index.js';
-                        const mainPath = path.resolve(path.dirname(fullPath), main);
-                        const [, merr] = os.stat(mainPath);
-                        if (merr === 0) return mainPath;
-                        // Try with .js
-                        const [, merr2] = os.stat(mainPath + '.js');
-                        if (merr2 === 0) return mainPath + '.js';
-                    } catch {}
-                } else {
-                    return fullPath;
-                }
-            }
-        }
-        dir = path.dirname(dir);
+// Resolve a package directory's main entry: package.json#main → index.js.
+// Returns the resolved file path, or null if neither exists.
+function _resolvePackageMain(pkgDir) {
+    const pkgJson = pkgDir + '/package.json';
+    if (_isReg(pkgJson)) {
+        try {
+            const pkg = JSON.parse(std.loadFile(pkgJson));
+            const main = pkg.main || 'index.js';
+            const mainPath = path.resolve(pkgDir, main);
+            if (_isReg(mainPath)) return mainPath;
+            if (_isReg(mainPath + '.js')) return mainPath + '.js';
+            if (_isReg(mainPath + '/index.js')) return mainPath + '/index.js';
+        } catch {}
     }
-
+    if (_isReg(pkgDir + '/index.js')) return pkgDir + '/index.js';
     return null;
 }
 
+function _resolveFile(id, basedir) {
+    // Relative or absolute id: resolve against basedir without node_modules walk.
+    // Bare '.' / '..' are valid (sigstore tuf does `require(".")` for sibling index.js).
+    const isRelOrAbs = id.startsWith('/') || id.startsWith('./') || id.startsWith('../') ||
+        id === '.' || id === '..';
+    if (isRelOrAbs) {
+        const baseAbs = id.startsWith('/') ? id : basedir + '/' + id;
+        const norm = path.normalize(baseAbs);
+        // 1. exact file
+        if (_isReg(norm)) return norm;
+        // 2. file + .js / .json
+        if (!id.endsWith('.js') && !id.endsWith('.json') && !id.endsWith('.mjs') && !id.endsWith('.cjs')) {
+            if (_isReg(norm + '.js')) return norm + '.js';
+            if (_isReg(norm + '.json')) return norm + '.json';
+        }
+        // 3. directory: package.json#main → index.js
+        if (_isDir(norm)) {
+            const main = _resolvePackageMain(norm);
+            if (main) return main;
+        }
+        return null;
+    }
+
+    // Bare specifier: walk node_modules upward.
+    let dir = basedir;
+    while (true) {
+        const nmDir = dir + '/node_modules/' + id;
+        // 1. nmDir as a regular file (rare: node_modules/foo as a single file)
+        if (_isReg(nmDir)) return nmDir;
+        // 2. nmDir + .js / .json
+        if (_isReg(nmDir + '.js')) return nmDir + '.js';
+        if (_isReg(nmDir + '.json')) return nmDir + '.json';
+        // 3. nmDir is a directory: package.json#main → index.js
+        if (_isDir(nmDir)) {
+            const main = _resolvePackageMain(nmDir);
+            if (main) return main;
+        }
+        if (dir === '/' || dir === '') break;
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+    }
+    return null;
+}
+
+// Shared across every _makeRequire — Node's module cache is process-global,
+// keyed by absolute resolved path. Without this, circular requires loop
+// forever (each module gets its own cache and re-evaluates the cycle).
+const _moduleCache = {};
+
 function _makeRequire(filename) {
     const basedir = path.dirname(filename || process.cwd() + '/repl');
-    const _moduleCache = {};
 
     function require(id) {
         // Built-in modules (with or without 'node:' prefix)
@@ -3262,10 +3463,18 @@ function _makeRequire(filename) {
         };
         _moduleCache[resolved] = mod;
 
-        // Wrap and execute
+        // Wrap and execute. Compile via evalScriptAsFunction (not `new Function`)
+        // so the wrapped script's [[ScriptOrModule]] carries `resolved` — that's
+        // what JS_GetScriptOrModuleName returns to the C-side module normalizer
+        // when this body calls dynamic `import()`. Without it, bare specifiers
+        // (`import('chalk')`) can't tell which node_modules tree to walk.
         const dirname = path.dirname(resolved);
-        const wrappedFn = new Function('exports', 'require', 'module', '__filename', '__dirname',
-            source + '\n//# sourceURL=' + resolved);
+        const wrappedFn = _nodeNative.evalScriptAsFunction(
+            '(function (exports, require, module, __filename, __dirname) {\n' +
+                source +
+                '\n})',
+            resolved
+        );
 
         const childRequire = _makeRequire(resolved);
         try {
@@ -3307,8 +3516,15 @@ if (typeof execArgv !== 'undefined') {
     process.argv0 = typeof argv0 !== 'undefined' ? argv0 : (process.argv[0] || 'node');
 }
 
-// Global require
-globalThis.require = _makeRequire(process.cwd() + '/repl');
+// Global require. For `node script.js`, basedir is the script's directory
+// so its top-level relative requires resolve against itself, matching Node's
+// per-file require semantics. For -e/-p/REPL (no script in argv), basedir
+// falls back to cwd.
+globalThis.require = _makeRequire(
+    (process.argv && process.argv.length > 1 && process.argv[1] && process.argv[1][0] === '/')
+        ? process.argv[1]
+        : process.cwd() + '/repl'
+);
 
 // Node.js globals
 globalThis.process = process;
@@ -3316,13 +3532,19 @@ globalThis.Buffer = Buffer;
 globalThis.global = globalThis;
 globalThis.GLOBAL = globalThis; // deprecated alias
 
-// Timer globals
-globalThis.setTimeout = globalThis.setTimeout || timers.setTimeout;
-globalThis.clearTimeout = globalThis.clearTimeout || timers.clearTimeout;
-globalThis.setInterval = globalThis.setInterval || timers.setInterval;
-globalThis.clearInterval = globalThis.clearInterval || timers.clearInterval;
-globalThis.setImmediate = globalThis.setImmediate || timers.setImmediate;
-globalThis.clearImmediate = globalThis.clearImmediate || timers.clearImmediate;
+// Timer globals — overwrite the js_std_add_helpers stubs that return a
+// raw int64 with the wrapped-id objects from `timers` above.
+globalThis.setTimeout = timers.setTimeout;
+globalThis.clearTimeout = timers.clearTimeout;
+globalThis.setInterval = timers.setInterval;
+globalThis.clearInterval = timers.clearInterval;
+globalThis.setImmediate = timers.setImmediate;
+globalThis.clearImmediate = timers.clearImmediate;
+
+// npm and hosted-git-info instantiate URL/URLSearchParams directly without
+// `require('url')`. QuickJS-NG doesn't ship them, so expose the bootstrap shims.
+globalThis.URL = url.URL;
+globalThis.URLSearchParams = url.URLSearchParams;
 
 // __dirname and __filename for the main module (set when running a file)
 globalThis.__filename = '';
@@ -3332,7 +3554,15 @@ globalThis.__dirname = '';
 globalThis.module = { exports: {} };
 globalThis.exports = globalThis.module.exports;
 
-// console already exists in QuickJS, but ensure it has all methods
+// console already exists in QuickJS, but ensure it has all methods.
+// QuickJS-NG's js_std_add_helpers ships only console.log; npm and most Node
+// code expect .error/.warn to land on stderr.
+if (!console.error) {
+    console.error = (...args) => {
+        process.stderr.write(args.map((a) => typeof a === 'string' ? a : util.inspect(a)).join(' ') + '\n');
+    };
+}
+if (!console.warn) console.warn = console.error;
 if (!console.debug) console.debug = console.log;
 if (!console.info) console.info = console.log;
 if (!console.dir) console.dir = (obj) => console.log(util.inspect(obj));

@@ -1822,19 +1822,42 @@ npm 10.x is ~12 MB unpacked of pure JS (no native runtime deps). Ship as a lazy 
 
 Pin a single npm version. Document in `docs/porting-guide.md`.
 
-### Task 5.2 — `package.json exports` field resolution in CommonJS
+### Task 5.2 — `package.json exports`/`imports` field resolution
+
+Split into two halves: CommonJS `require()` (5.2a) and ESM dynamic `import()` (5.2b). The two paths share the algorithm but live on different sides of the C/JS boundary, so they're separate work items.
+
+#### Task 5.2a — CommonJS side
 
 **Files:**
-- Modify: `examples/libs/quickjs/node-compat/bootstrap.js` — `_resolveFile` (around L2369–2480)
+- Modify: `examples/libs/quickjs/node-compat/bootstrap.js` — `_resolveFile`
 
-Implement `package.json#exports` lookup:
-1. If `exports` is a string → use it
-2. If `exports['.']` exists → resolve subpath `.`
-3. If `exports[subpath]` exists → resolve subpath (`./util`, `./package.json`, etc.)
-4. Fall back to `main` field (current behaviour)
-5. Conditional exports: `default`, `node`, `import`, `require` — pick `require` for CJS path, `import` for ESM path.
+Implement `package.json#exports` lookup in `_resolveFile`:
+1. If `exports` is a string → use it.
+2. If `exports['.']` exists → resolve subpath `.`.
+3. If `exports[subpath]` exists → resolve subpath (`./util`, `./package.json`, etc.).
+4. Fall back to `main` field (current behaviour).
+5. Conditional exports: `default`, `node`, `require` — pick `require` (CJS path).
 
-This is a real Node feature; spec at <https://nodejs.org/api/packages.html#exports>. Implement enough to handle the npm + lodash + chalk class of packages.
+Spec at <https://nodejs.org/api/packages.html#exports>.
+
+#### Task 5.2b — ESM dynamic-import side (live blocker for `npm --version`)
+
+**Files:**
+- Modify: `examples/libs/quickjs/node-main.c` — install a `JSModuleNormalizeFunc`/`JSModuleLoaderFunc2` pair via `JS_SetModuleLoaderFunc2`.
+- Modify: `examples/libs/quickjs/node-compat-native/node-native.c` — expose `evalWithFilename(source, filename)` so the bootstrap's CJS loader can pass the resolved path through to QuickJS's `JS_GetScriptOrModuleName`. Without this, dynamic `import()` from `new Function` bodies has an empty base and bare-specifier resolution can't tell which `node_modules/` tree to walk.
+- Modify: `examples/libs/quickjs/node-compat/bootstrap.js` — switch `_makeRequire` from `new Function(...)` to the new native eval so module bodies have a real script identity.
+
+Algorithm in the C normalizer:
+1. `qjs:`, `node:` → pass through.
+2. Relative/absolute → default-style relative resolve, plus directory → `package.json#main` if applicable.
+3. `#subpath` → look up base file's package.json `imports` field; resolve conditionally.
+4. Bare specifier → walk `node_modules/<name>` upward from `dirname(base)`; resolve `exports`/`main` conditionally.
+
+Conditional priority for ESM: `node`, `import`, `default`.
+
+Loader hook for `node:foo`: synthesize `const _m = globalThis.require('foo'); export default _m;` and compile as a module. This is enough for default imports (which is what chalk/supports-color need); named imports of `node:` builtins are out of scope until a user surface needs them.
+
+This is the same algorithm as 5.2a but on the C side because dynamic `import()` reaches QuickJS's module loader before any JS code runs. Sharing the algorithm in JS is tempting but the C normalizer can read `package.json` directly without round-tripping through globals.
 
 ### Task 5.3 — Surface gaps as errors, not silent failures
 

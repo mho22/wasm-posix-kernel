@@ -12,6 +12,7 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #include "cutils.h"
 #include "quickjs.h"
@@ -166,6 +167,462 @@ static int eval_file(JSContext *ctx, const char *filename, int module)
     return ret;
 }
 
+/* ============================================================
+ * Node-style module resolver for ESM dynamic import().
+ *
+ * QuickJS's default loader treats every specifier as a literal filename.
+ * Node-compat callers (chiefly the bootstrap's require() chain awaiting
+ * `import('chalk')`) need bare specifiers, package-relative `#imports`,
+ * and `node:` builtins to resolve like Node does. This block adds:
+ *
+ *   - node_module_normalize: bare → node_modules walk + package.json
+ *     (`exports`/`main`); `#name` → package.json#imports of the importer's
+ *     package; relative/absolute → default behaviour, plus directory →
+ *     package.json#main.
+ *   - node_module_loader: synthesises an ESM bridge for `node:foo` that
+ *     re-exports `globalThis.require('foo')` as default, and otherwise
+ *     delegates to QuickJS's stock file-based loader.
+ * ============================================================ */
+
+static int nm_is_regular_file(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static int nm_is_directory(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+/* Allocate `dirname(p)` in ctx's heap. The caller frees with js_free. */
+static char *nm_dirname(JSContext *ctx, const char *p)
+{
+    const char *slash = strrchr(p, '/');
+    if (!slash) return js_strdup(ctx, ".");
+    if (slash == p) return js_strdup(ctx, "/");
+    size_t len = slash - p;
+    char *out = js_malloc(ctx, len + 1);
+    if (!out) return NULL;
+    memcpy(out, p, len);
+    out[len] = '\0';
+    return out;
+}
+
+static char *nm_join(JSContext *ctx, const char *a, const char *b)
+{
+    size_t la = strlen(a), lb = strlen(b);
+    int need_slash = (la > 0 && a[la - 1] != '/' && b[0] != '/');
+    char *out = js_malloc(ctx, la + lb + (need_slash ? 1 : 0) + 1);
+    if (!out) return NULL;
+    memcpy(out, a, la);
+    size_t off = la;
+    if (need_slash) out[off++] = '/';
+    memcpy(out + off, b, lb);
+    out[off + lb] = '\0';
+    return out;
+}
+
+/* Read whole file; returns malloc'd null-terminated string (caller frees with
+   js_free), or NULL on error. */
+static char *nm_read_file(JSContext *ctx, const char *path, size_t *out_len)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); return NULL; }
+    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
+    char *buf = js_malloc(ctx, (size_t)sz + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[n] = '\0';
+    if (out_len) *out_len = n;
+    return buf;
+}
+
+static JSValue nm_load_package_json(JSContext *ctx, const char *pkg_dir)
+{
+    char *pjson = nm_join(ctx, pkg_dir, "package.json");
+    if (!pjson) return JS_EXCEPTION;
+    if (!nm_is_regular_file(pjson)) { js_free(ctx, pjson); return JS_UNDEFINED; }
+    size_t buf_len;
+    char *buf = nm_read_file(ctx, pjson, &buf_len);
+    JSValue parsed = JS_UNDEFINED;
+    if (buf) parsed = JS_ParseJSON(ctx, buf, buf_len, pjson);
+    js_free(ctx, buf);
+    js_free(ctx, pjson);
+    if (JS_IsException(parsed)) {
+        /* Tolerate malformed package.json — treat as missing. */
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        return JS_UNDEFINED;
+    }
+    return parsed;
+}
+
+/* Walk up from `start_dir` to find the nearest enclosing package.json.
+   Returns malloc'd directory path on success, NULL otherwise. */
+static char *nm_find_package_root(JSContext *ctx, const char *start_dir)
+{
+    char *dir = js_strdup(ctx, start_dir);
+    if (!dir) return NULL;
+    while (dir[0]) {
+        char *pjson = nm_join(ctx, dir, "package.json");
+        if (!pjson) { js_free(ctx, dir); return NULL; }
+        int ok = nm_is_regular_file(pjson);
+        js_free(ctx, pjson);
+        if (ok) return dir;
+        if (!strcmp(dir, "/")) break;
+        char *parent = nm_dirname(ctx, dir);
+        if (!parent) { js_free(ctx, dir); return NULL; }
+        /* dirname(".") == "." — guard against the fixed point before freeing. */
+        int stuck = !strcmp(parent, dir);
+        js_free(ctx, dir);
+        if (stuck) { js_free(ctx, parent); return NULL; }
+        dir = parent;
+    }
+    js_free(ctx, dir);
+    return NULL;
+}
+
+/* Pick a value out of a conditional-export object.
+   ESM priority is `node` → `import` → `default`. CJS callers don't reach this
+   path (they use the JS-side resolver). Returns a JSValue that the caller
+   must JS_FreeValue. JS_UNDEFINED if no condition matched. */
+static JSValue nm_pick_condition(JSContext *ctx, JSValueConst obj)
+{
+    static const char *conds[] = { "node", "import", "default" };
+    for (size_t i = 0; i < countof(conds); i++) {
+        JSValue v = JS_GetPropertyStr(ctx, obj, conds[i]);
+        if (JS_IsException(v)) return JS_EXCEPTION;
+        if (!JS_IsUndefined(v)) return v;
+        JS_FreeValue(ctx, v);
+    }
+    return JS_UNDEFINED;
+}
+
+/* Walk a (possibly nested) conditional/string node from package.json
+   `exports` or `imports`. Strings ("./foo.js") are returned as-is; objects
+   are recursively resolved via nm_pick_condition. Returns NULL on no match. */
+static char *nm_collapse_target(JSContext *ctx, JSValueConst node)
+{
+    JSValue cur = JS_DupValue(ctx, node);
+    while (JS_IsObject(cur) && !JS_IsArray(cur)) {
+        JSValue picked = nm_pick_condition(ctx, cur);
+        JS_FreeValue(ctx, cur);
+        if (JS_IsException(picked)) return NULL;
+        if (JS_IsUndefined(picked)) return NULL;
+        cur = picked;
+    }
+    if (!JS_IsString(cur)) { JS_FreeValue(ctx, cur); return NULL; }
+    const char *s = JS_ToCString(ctx, cur);
+    char *out = s ? js_strdup(ctx, s) : NULL;
+    JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, cur);
+    return out;
+}
+
+/* Resolve `pkg_dir` + a target string ("./source/index.js") to an absolute
+   path. Validates the file exists; otherwise returns NULL. */
+static char *nm_resolve_relative_target(JSContext *ctx,
+                                         const char *pkg_dir,
+                                         const char *target)
+{
+    if (target[0] == '.' && target[1] == '/') target += 2;
+    char *full = nm_join(ctx, pkg_dir, target);
+    if (!full) return NULL;
+    if (nm_is_regular_file(full)) return full;
+    js_free(ctx, full);
+    return NULL;
+}
+
+/* Resolve a bare specifier inside `pkg_dir`'s package.json `exports` /
+   `main`. `subpath` is "" (root) or "./util" etc. */
+static char *nm_resolve_in_package(JSContext *ctx,
+                                    const char *pkg_dir,
+                                    const char *subpath)
+{
+    JSValue pkg = nm_load_package_json(ctx, pkg_dir);
+    if (JS_IsException(pkg)) return NULL;
+    if (JS_IsUndefined(pkg)) {
+        /* No package.json — fall back to <pkg_dir>/index.js */
+        char *idx = nm_join(ctx, pkg_dir, "index.js");
+        if (idx && nm_is_regular_file(idx)) return idx;
+        js_free(ctx, idx);
+        return NULL;
+    }
+
+    char *result = NULL;
+    JSValue exports_v = JS_GetPropertyStr(ctx, pkg, "exports");
+    if (!JS_IsUndefined(exports_v) && !JS_IsException(exports_v)) {
+        JSValue target_node = JS_UNDEFINED;
+        if (JS_IsString(exports_v)) {
+            if (!subpath[0])
+                target_node = JS_DupValue(ctx, exports_v);
+        } else if (JS_IsObject(exports_v)) {
+            const char *key = subpath[0] ? subpath : ".";
+            JSValue v = JS_GetPropertyStr(ctx, exports_v, key);
+            if (!JS_IsUndefined(v) && !JS_IsException(v)) {
+                target_node = v;
+            } else {
+                JS_FreeValue(ctx, v);
+                /* No subpath keys at all → conditional exports for root. */
+                if (!subpath[0]) target_node = JS_DupValue(ctx, exports_v);
+            }
+        }
+        if (!JS_IsUndefined(target_node)) {
+            char *target = nm_collapse_target(ctx, target_node);
+            JS_FreeValue(ctx, target_node);
+            if (target) {
+                result = nm_resolve_relative_target(ctx, pkg_dir, target);
+                js_free(ctx, target);
+            }
+        }
+    }
+    JS_FreeValue(ctx, exports_v);
+
+    /* Fall back to `main` (or index.js) if `exports` didn't resolve. Only
+       valid for the root subpath — npm doesn't request subpaths against
+       legacy main-only packages. */
+    if (!result && !subpath[0]) {
+        JSValue main_v = JS_GetPropertyStr(ctx, pkg, "main");
+        const char *main_s = JS_IsString(main_v) ? JS_ToCString(ctx, main_v) : NULL;
+        const char *target = main_s ? main_s : "index.js";
+        char *full = nm_join(ctx, pkg_dir, target);
+        if (full) {
+            if (nm_is_regular_file(full)) {
+                result = full;
+            } else {
+                /* main may be extension-less or directory — try .js then index.js
+                   in a single reusable buffer. */
+                size_t fl = strlen(full);
+                char *cand = js_malloc(ctx, fl + 10);
+                if (cand) {
+                    snprintf(cand, fl + 10, "%s.js", full);
+                    if (nm_is_regular_file(cand)) {
+                        result = cand;
+                    } else {
+                        snprintf(cand, fl + 10, "%s/index.js", full);
+                        if (nm_is_regular_file(cand)) {
+                            result = cand;
+                        } else {
+                            js_free(ctx, cand);
+                        }
+                    }
+                }
+                js_free(ctx, full);
+            }
+        }
+        JS_FreeCString(ctx, main_s);
+        JS_FreeValue(ctx, main_v);
+    }
+
+    JS_FreeValue(ctx, pkg);
+    return result;
+}
+
+/* Bare specifier (`chalk`, `chalk/foo`): walk from base's directory upward
+   looking for `node_modules/<head>`. */
+static char *nm_resolve_bare(JSContext *ctx, const char *base, const char *spec)
+{
+    /* Split spec into `head` (chalk, @scope/name) and `subpath` (./foo or ""). */
+    const char *slash;
+    size_t head_len;
+    if (spec[0] == '@') {
+        slash = strchr(spec + 1, '/');
+        if (slash) {
+            const char *slash2 = strchr(slash + 1, '/');
+            head_len = slash2 ? (size_t)(slash2 - spec) : strlen(spec);
+        } else {
+            head_len = strlen(spec);
+        }
+    } else {
+        slash = strchr(spec, '/');
+        head_len = slash ? (size_t)(slash - spec) : strlen(spec);
+    }
+
+    char head[256];
+    if (head_len >= sizeof(head)) return NULL;
+    memcpy(head, spec, head_len);
+    head[head_len] = '\0';
+
+    char subpath[1024];
+    if (head_len == strlen(spec)) {
+        subpath[0] = '\0';
+    } else {
+        if (snprintf(subpath, sizeof(subpath), ".%s", spec + head_len) < 0)
+            return NULL;
+    }
+
+    char *dir = nm_dirname(ctx, base && base[0] ? base : "/");
+    if (!dir) return NULL;
+    char *result = NULL;
+    while (1) {
+        char *nm_dir = js_malloc(ctx,
+            strlen(dir) + strlen("/node_modules/") + head_len + 1);
+        if (!nm_dir) break;
+        sprintf(nm_dir, "%s/node_modules/%s", dir, head);
+        if (nm_is_directory(nm_dir)) {
+            result = nm_resolve_in_package(ctx, nm_dir, subpath);
+            js_free(ctx, nm_dir);
+            if (result) break;
+        } else {
+            js_free(ctx, nm_dir);
+        }
+        if (!strcmp(dir, "/")) break;
+        char *parent = nm_dirname(ctx, dir);
+        if (!parent) { js_free(ctx, dir); return NULL; }
+        int stuck = !strcmp(parent, dir);
+        js_free(ctx, dir);
+        if (stuck) { js_free(ctx, parent); dir = NULL; break; }
+        dir = parent;
+    }
+    js_free(ctx, dir);
+    return result;
+}
+
+/* `#name` subpath import: resolve via the importer's package.json `imports`. */
+static char *nm_resolve_subpath_import(JSContext *ctx, const char *base,
+                                        const char *spec)
+{
+    char *base_dir = nm_dirname(ctx, base && base[0] ? base : "/");
+    if (!base_dir) return NULL;
+    char *pkg_root = nm_find_package_root(ctx, base_dir);
+    js_free(ctx, base_dir);
+    if (!pkg_root) return NULL;
+
+    JSValue pkg = nm_load_package_json(ctx, pkg_root);
+    char *result = NULL;
+    if (JS_IsObject(pkg)) {
+        JSValue imports = JS_GetPropertyStr(ctx, pkg, "imports");
+        if (JS_IsObject(imports)) {
+            JSValue node = JS_GetPropertyStr(ctx, imports, spec);
+            if (!JS_IsUndefined(node) && !JS_IsException(node)) {
+                char *target = nm_collapse_target(ctx, node);
+                if (target) {
+                    result = nm_resolve_relative_target(ctx, pkg_root, target);
+                    js_free(ctx, target);
+                }
+            }
+            JS_FreeValue(ctx, node);
+        }
+        JS_FreeValue(ctx, imports);
+    }
+    JS_FreeValue(ctx, pkg);
+    js_free(ctx, pkg_root);
+    return result;
+}
+
+/* Same shape as js_default_module_normalize_name in quickjs.c — trims
+   leading `./` and `../` segments, joins onto base's dirname. We re-do
+   this in C rather than calling out because we also need to collapse
+   the result against package.json#main when it lands on a directory. */
+static char *nm_normalize_relative(JSContext *ctx, const char *base, const char *name)
+{
+    const char *r = name;
+    char *filename;
+    int cap, len;
+    const char *base_end = base ? strrchr(base, '/') : NULL;
+    len = base_end ? (int)(base_end - base) : 0;
+    cap = len + (int)strlen(name) + 2;
+    filename = js_malloc(ctx, cap);
+    if (!filename) return NULL;
+    if (len > 0) memcpy(filename, base, len);
+    filename[len] = '\0';
+
+    while (1) {
+        if (r[0] == '.' && r[1] == '/') {
+            r += 2;
+        } else if (r[0] == '.' && r[1] == '.' && r[2] == '/') {
+            char *p;
+            if (filename[0] == '\0') break;
+            p = strrchr(filename, '/');
+            if (!p) p = filename; else p++;
+            if (!strcmp(p, ".") || !strcmp(p, "..")) break;
+            if (p > filename) p--;
+            *p = '\0';
+            r += 3;
+        } else {
+            break;
+        }
+    }
+    if (filename[0] != '\0') js__pstrcat(filename, cap, "/");
+    js__pstrcat(filename, cap, r);
+    return filename;
+}
+
+/* Promote a directory path to its package.json#main (or index.js). Used
+   when the JS side hands us an absolute path that points at a directory
+   instead of a file. */
+static char *nm_collapse_directory(JSContext *ctx, char *path)
+{
+    if (!nm_is_directory(path)) return path;
+    char *resolved = nm_resolve_in_package(ctx, path, "");
+    if (resolved) { js_free(ctx, path); return resolved; }
+    return path;
+}
+
+static char *node_module_normalize(JSContext *ctx, const char *base_name,
+                                    const char *name, void *opaque)
+{
+    if (!strncmp(name, "qjs:", 4) || !strncmp(name, "node:", 5))
+        return js_strdup(ctx, name);
+
+    if (name[0] == '/')
+        return nm_collapse_directory(ctx, js_strdup(ctx, name));
+
+    if (name[0] == '.') {
+        char *out = nm_normalize_relative(ctx, base_name ? base_name : "", name);
+        return out ? nm_collapse_directory(ctx, out) : NULL;
+    }
+
+    if (name[0] == '#') {
+        char *out = nm_resolve_subpath_import(ctx, base_name, name);
+        if (out) return out;
+        JS_ThrowReferenceError(ctx,
+            "could not resolve subpath import '%s' from '%s'",
+            name, base_name ? base_name : "<anonymous>");
+        return NULL;
+    }
+
+    /* bare specifier */
+    char *out = nm_resolve_bare(ctx, base_name, name);
+    if (out) return out;
+    JS_ThrowReferenceError(ctx,
+        "could not resolve module '%s' from '%s'",
+        name, base_name ? base_name : "<anonymous>");
+    return NULL;
+}
+
+static JSModuleDef *node_module_loader(JSContext *ctx, const char *module_name,
+                                        void *opaque, JSValueConst attributes)
+{
+    if (!strncmp(module_name, "node:", 5)) {
+        char src[256];
+        int n = snprintf(src, sizeof(src),
+            "const _m = globalThis.require(\"%s\");\nexport default _m;\n",
+            module_name + 5);
+        if (n < 0 || n >= (int)sizeof(src)) {
+            JS_ThrowInternalError(ctx, "node: builtin name too long: %s",
+                                  module_name);
+            return NULL;
+        }
+        JSValue func = JS_Eval(ctx, src, strlen(src), module_name,
+                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+        if (JS_IsException(func)) return NULL;
+        if (js_module_set_import_meta(ctx, func, false, false) < 0) {
+            JS_FreeValue(ctx, func);
+            return NULL;
+        }
+        JSModuleDef *m = JS_VALUE_GET_PTR(func);
+        JS_FreeValue(ctx, func);
+        return m;
+    }
+    return js_module_loader(ctx, module_name, opaque, attributes);
+}
+
 static void help(void)
 {
     printf("node (QuickJS-NG v%s Node.js compatibility layer)\n"
@@ -268,8 +725,10 @@ int main(int argc, char **argv)
         return 2;
     }
 
-    /* Set up module loader for user ES modules */
-    JS_SetModuleLoaderFunc2(rt, NULL, js_module_loader,
+    /* Set up module loader for user ES modules. Custom normalize + loader
+       give bare specifiers, `#imports`, and `node:foo` the Node-style
+       resolution that npm's dynamic `import('chalk')` chain expects. */
+    JS_SetModuleLoaderFunc2(rt, node_module_normalize, node_module_loader,
                             js_module_check_attributes, NULL);
     JS_SetHostPromiseRejectionTracker(rt, js_std_promise_rejection_tracker,
                                        NULL);
