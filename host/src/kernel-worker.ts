@@ -1362,6 +1362,27 @@ export class CentralizedKernelWorker {
       ((ptyIdx: number, rows: number, cols: number) => number) | undefined;
     if (!kernelPtySetWinsize) return;
     kernelPtySetWinsize(ptyIdx, rows, cols);
+    this.scheduleWakeBlockedRetries();
+
+    // A process parked in a host-side setTimeout-backed nanosleep won't notice
+    // the SIGWINCH the kernel just raised — the timer just runs to completion.
+    // Speculatively dequeue a Handler signal for each blocked pid; if one was
+    // pending we complete the sleep with EINTR so the glue can dispatch it.
+    // Skipped pids (no signal queued) keep their original sleep deadline.
+    const EINTR = 4;
+    for (const [pid, entry] of Array.from(this.pendingSleeps.entries())) {
+      if (!this.processes.has(pid)) continue;
+      this.dequeueSignalForDelivery(entry.channel);
+      const view = new DataView(entry.channel.memory.buffer, entry.channel.channelOffset);
+      if (view.getUint32(CH_SIG_SIGNUM, true) > 0) {
+        clearTimeout(entry.timer);
+        this.pendingSleeps.delete(pid);
+        this.completeChannel(
+          entry.channel, entry.syscallNr, entry.origArgs,
+          SYSCALL_ARGS[entry.syscallNr], -1, EINTR,
+        );
+      }
+    }
   }
 
   /**
