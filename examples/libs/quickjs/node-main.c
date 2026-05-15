@@ -11,8 +11,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#include <time.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "cutils.h"
 #include "quickjs.h"
@@ -35,7 +35,8 @@ static char **node__argv;
 
 /* Node-flavoured event loop. Wraps js_std_loop_once() so we can drive the
    socket fd-watch table on every iteration. Exit when no JS jobs, no
-   timers, and no pending socket watches remain. */
+   timers, no pending socket watches, and no os.setReadHandler watches
+   (the REPL keeps itself alive solely via the latter). */
 static int js_node_loop(JSContext *ctx)
 {
     JSRuntime *rt = JS_GetRuntime(ctx);
@@ -44,10 +45,20 @@ static int js_node_loop(JSContext *ctx)
         int delay = js_std_loop_once(ctx); /* drains microtasks + 1 timer */
         if (delay == -2) return -1;        /* JS error */
 
+        /* js_std_loop_once drains microtasks but skips the unhandled-
+           rejection sweep that js_std_loop runs after each drain. Without
+           this, a top-level `await main(...)`-style entry that rejects
+           returns silently with exit 0 — the rejection sits forever on
+           the tracker's list. Calling the check here matches js_std_loop's
+           cadence and exits 1 with a "Possibly unhandled promise rejection"
+           message on stderr. */
+        js_std_promise_rejection_check(ctx);
+
         int dispatched = js_node_socket_dispatch(ctx);
         dispatched += js_node_tls_dispatch(ctx);
         int has_watches = js_node_socket_has_watches() ||
-                          js_node_tls_has_watches();
+                          js_node_tls_has_watches() ||
+                          js_std_has_io_handlers(ctx);
         int jobs_pending = JS_IsJobPending(rt);
 
         if (!has_watches && !jobs_pending && delay == -1) {
@@ -63,11 +74,11 @@ static int js_node_loop(JSContext *ctx)
             sleep_ms = delay;
         }
         if (sleep_ms <= 0) continue;
-        struct timespec ts = {
-            .tv_sec  = sleep_ms / 1000,
-            .tv_nsec = (sleep_ms % 1000) * 1000000L,
-        };
-        nanosleep(&ts, NULL);
+
+        /* Poll the os.setReadHandler/setWriteHandler fds and dispatch any
+           handler that fires. With an empty rw list this is just a sleep. */
+        int poll_ret = js_std_poll_io(ctx, sleep_ms);
+        if (poll_ret == -2) return -1; /* JS error in handler */
     }
 }
 
@@ -570,6 +581,20 @@ static char *node_module_normalize(JSContext *ctx, const char *base_name,
     if (!strncmp(name, "qjs:", 4) || !strncmp(name, "node:", 5))
         return js_strdup(ctx, name);
 
+    /* Promote a synthetic or relative base_name (e.g. "<cmdline>",
+       "<input>", "./foo.js") to absolute via cwd. Without this, downstream
+       resolvers produce non-absolute paths and the `module_name[0] == '/'`
+       CJS-bridge gate in node_module_loader silently skips, so CJS imports
+       from synthetic bases fall through to plain ESM loading and break. */
+    char abs_base[1024];
+    if (base_name && base_name[0] && base_name[0] != '/') {
+        char cwd[512];
+        if (getcwd(cwd, sizeof(cwd))) {
+            snprintf(abs_base, sizeof(abs_base), "%s/%s", cwd, base_name);
+            base_name = abs_base;
+        }
+    }
+
     if (name[0] == '/')
         return nm_collapse_directory(ctx, js_strdup(ctx, name));
 
@@ -587,6 +612,33 @@ static char *node_module_normalize(JSContext *ctx, const char *base_name,
         return NULL;
     }
 
+    /* Bare specifier whose head names a Node builtin → rewrite to
+       node:<name>. Modern packages often omit the `node:` prefix
+       (`import { spawnSync } from "child_process"`); without this rewrite
+       they hit nm_resolve_bare and get "module not found". */
+    {
+        static const char *const builtins[] = {
+            "assert", "async_hooks", "buffer", "child_process", "cluster",
+            "console", "constants", "crypto", "diagnostics_channel", "dns",
+            "events", "fs", "http", "http2", "https", "module", "net", "os",
+            "path", "perf_hooks", "process", "punycode", "querystring",
+            "readline", "stream", "string_decoder", "timers", "tls", "tty",
+            "url", "util", "v8", "vm", "worker_threads", "zlib", NULL,
+        };
+        const char *slash = strchr(name, '/');
+        size_t headlen = slash ? (size_t)(slash - name) : strlen(name);
+        for (int i = 0; builtins[i]; i++) {
+            size_t blen = strlen(builtins[i]);
+            if (blen == headlen && !strncmp(name, builtins[i], blen)) {
+                size_t total = 5 + strlen(name) + 1;
+                char *out = js_malloc(ctx, total);
+                if (!out) return NULL;
+                snprintf(out, total, "node:%s", name);
+                return out;
+            }
+        }
+    }
+
     /* bare specifier */
     char *out = nm_resolve_bare(ctx, base_name, name);
     if (out) return out;
@@ -596,30 +648,194 @@ static char *node_module_normalize(JSContext *ctx, const char *base_name,
     return NULL;
 }
 
+/* Identifier-and-not-reserved test for binding names emitted in
+   `export const { ... } = _m`. Anything that isn't a clean ASCII
+   identifier (or that hits a small list of reserved words that can't
+   be binding names) is omitted from the named-export list — callers
+   reach those properties via `default` instead. */
+static bool nm_is_export_safe_ident(const char *s, size_t len)
+{
+    if (len == 0 || len > 64) return false;
+    char c = s[0];
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+          c == '_' || c == '$'))
+        return false;
+    for (size_t i = 1; i < len; i++) {
+        c = s[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '$'))
+            return false;
+    }
+    static const char *const reserved[] = {
+        "default", "class", "let", "const", "var", "function", "return",
+        "if", "else", "for", "while", "do", "switch", "case", "break",
+        "continue", "throw", "try", "catch", "finally", "new", "this",
+        "typeof", "instanceof", "void", "delete", "in", "of", "import",
+        "export", "from", "as", "yield", "await", "async", "static",
+        "extends", "super", "enum", "true", "false", "null", "undefined",
+        NULL,
+    };
+    for (int i = 0; reserved[i]; i++) {
+        size_t rlen = strlen(reserved[i]);
+        if (rlen == len && !strncmp(s, reserved[i], len))
+            return false;
+    }
+    return true;
+}
+
+/* Emit `s` as a JSON/JS-string-literal into `src` (with surrounding quotes).
+   Used to splice absolute file paths into synthesised module sources without
+   risking quote/backslash injection. Callers pass paths with mostly-printable
+   ASCII; we still escape control bytes to be safe. */
+static void nm_dbuf_putjs(DynBuf *src, const char *s)
+{
+    dbuf_putc(src, '"');
+    for (const char *p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') {
+            dbuf_putc(src, '\\');
+            dbuf_putc(src, c);
+        } else if (c < 0x20) {
+            char buf[8];
+            int n = snprintf(buf, sizeof(buf), "\\u%04x", c);
+            dbuf_put(src, (const uint8_t *)buf, n);
+        } else {
+            dbuf_putc(src, c);
+        }
+    }
+    dbuf_putc(src, '"');
+}
+
+/* Classify a resolved absolute file as CJS for the purpose of ESM-import
+   interop. `.cjs` is always CJS; `.mjs`/`.json` are not. For `.js` (or
+   extension-less) the answer is the nearest enclosing `package.json`'s
+   `"type"` field — `"module"` → ESM, anything else (including absent) →
+   CJS, matching Node's defaults. If no package.json is found, treat as
+   ESM and let the default loader run — it's the conservative fallback. */
+static bool nm_is_cjs_path(JSContext *ctx, const char *abs_path)
+{
+    if (js__has_suffix(abs_path, ".cjs")) return true;
+    if (js__has_suffix(abs_path, ".mjs")) return false;
+    if (js__has_suffix(abs_path, ".json")) return false;
+
+    char *dir = nm_dirname(ctx, abs_path);
+    if (!dir) return false;
+    char *pkg_root = nm_find_package_root(ctx, dir);
+    js_free(ctx, dir);
+    if (!pkg_root) return false;
+
+    JSValue pkg = nm_load_package_json(ctx, pkg_root);
+    js_free(ctx, pkg_root);
+    bool is_cjs = false;
+    if (JS_IsObject(pkg)) {
+        JSValue type_v = JS_GetPropertyStr(ctx, pkg, "type");
+        if (JS_IsString(type_v)) {
+            const char *t = JS_ToCString(ctx, type_v);
+            is_cjs = !(t && !strcmp(t, "module"));
+            JS_FreeCString(ctx, t);
+        } else {
+            /* No "type" field → CommonJS by Node default. */
+            is_cjs = true;
+        }
+        JS_FreeValue(ctx, type_v);
+    }
+    JS_FreeValue(ctx, pkg);
+    return is_cjs;
+}
+
+/* Synthesise an ESM bridge module that does
+       const _m = globalThis.require(<require_arg>);
+       export const { …enumerable own keys… } = _m;
+       export default _m;
+   then compile and return its JSModuleDef. Used for two cases:
+     1. `node:foo` builtin specifiers, with require_arg = "foo".
+     2. Absolute paths to CJS files, with require_arg = the absolute path.
+   The require call also runs at module-eval time, but bootstrap's CJS
+   cache makes it idempotent — the second require returns the same
+   module.exports object enumerated here.
+
+   Returns NULL with a pending exception on failure; caller propagates. */
+static JSModuleDef *nm_build_require_bridge(JSContext *ctx,
+                                             const char *module_name,
+                                             const char *require_arg)
+{
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue req_fn = JS_GetPropertyStr(ctx, global, "require");
+    JS_FreeValue(ctx, global);
+    if (!JS_IsFunction(ctx, req_fn)) {
+        JS_FreeValue(ctx, req_fn);
+        JS_ThrowInternalError(ctx,
+            "globalThis.require missing for '%s'", module_name);
+        return NULL;
+    }
+    JSValue arg = JS_NewString(ctx, require_arg);
+    JSValue mod_obj = JS_Call(ctx, req_fn, JS_UNDEFINED, 1, &arg);
+    JS_FreeValue(ctx, req_fn);
+    JS_FreeValue(ctx, arg);
+    if (JS_IsException(mod_obj)) return NULL;
+
+    DynBuf src;
+    dbuf_init(&src);
+    dbuf_putstr(&src, "const _m = globalThis.require(");
+    nm_dbuf_putjs(&src, require_arg);
+    dbuf_putstr(&src, ");\n");
+    if (JS_IsObject(mod_obj)) {
+        JSPropertyEnum *tab = NULL;
+        uint32_t count = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &count, mod_obj,
+                                   JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) >= 0) {
+            bool first = true;
+            for (uint32_t i = 0; i < count; i++) {
+                size_t klen;
+                const char *kstr = JS_AtomToCStringLen(ctx, &klen, tab[i].atom);
+                if (kstr && nm_is_export_safe_ident(kstr, klen)) {
+                    if (first) {
+                        dbuf_putstr(&src, "export const { ");
+                        first = false;
+                    } else {
+                        dbuf_putstr(&src, ", ");
+                    }
+                    dbuf_put(&src, (const uint8_t *)kstr, klen);
+                }
+                if (kstr) JS_FreeCString(ctx, kstr);
+            }
+            if (!first) dbuf_putstr(&src, " } = _m;\n");
+            JS_FreePropertyEnum(ctx, tab, count);
+        }
+    }
+    JS_FreeValue(ctx, mod_obj);
+    dbuf_putstr(&src, "export default _m;\n");
+    dbuf_putc(&src, 0);
+
+    JSValue func = JS_Eval(ctx, (const char *)src.buf, src.size - 1,
+                           module_name,
+                           JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    dbuf_free(&src);
+    if (JS_IsException(func)) return NULL;
+    if (js_module_set_import_meta(ctx, func, false, false) < 0) {
+        JS_FreeValue(ctx, func);
+        return NULL;
+    }
+    JSModuleDef *m = JS_VALUE_GET_PTR(func);
+    JS_FreeValue(ctx, func);
+    return m;
+}
+
 static JSModuleDef *node_module_loader(JSContext *ctx, const char *module_name,
                                         void *opaque, JSValueConst attributes)
 {
-    if (!strncmp(module_name, "node:", 5)) {
-        char src[256];
-        int n = snprintf(src, sizeof(src),
-            "const _m = globalThis.require(\"%s\");\nexport default _m;\n",
-            module_name + 5);
-        if (n < 0 || n >= (int)sizeof(src)) {
-            JS_ThrowInternalError(ctx, "node: builtin name too long: %s",
-                                  module_name);
-            return NULL;
-        }
-        JSValue func = JS_Eval(ctx, src, strlen(src), module_name,
-                               JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
-        if (JS_IsException(func)) return NULL;
-        if (js_module_set_import_meta(ctx, func, false, false) < 0) {
-            JS_FreeValue(ctx, func);
-            return NULL;
-        }
-        JSModuleDef *m = JS_VALUE_GET_PTR(func);
-        JS_FreeValue(ctx, func);
-        return m;
-    }
+    if (!strncmp(module_name, "node:", 5))
+        return nm_build_require_bridge(ctx, module_name, module_name + 5);
+
+    /* Absolute path to a CJS-shaped file: route through globalThis.require
+       and re-expose the exports as ESM bindings. Without this, modern
+       packages that publish CJS but get ESM-imported (e.g. `import { parse }
+       from "./some-cjs.js"`) fail with "Could not find export 'parse'" —
+       QuickJS's default loader treats every .js file as ESM and finds no
+       declared bindings. Real Node has implicit ESM↔CJS interop for this. */
+    if (module_name[0] == '/' && nm_is_cjs_path(ctx, module_name))
+        return nm_build_require_bridge(ctx, module_name, module_name);
+
     return js_module_loader(ctx, module_name, opaque, attributes);
 }
 

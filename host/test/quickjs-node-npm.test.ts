@@ -185,4 +185,71 @@ describe.skipIf(!HAS_NODE || !HAS_NPM)("npm 10.9.2 bootstrap (Phase 5)", () => {
       rmSync(cache, { recursive: true, force: true });
     }
   });
+
+  it("`npm install express` adds node_modules/express with a multi-dep tree", { timeout: 600_000 }, async () => {
+    const prefix = mkdtempSync(join(tmpdir(), "npm-express-"));
+    const cache = mkdtempSync(join(tmpdir(), "npm-express-cache-"));
+    writeFileSync(join(prefix, "package.json"), JSON.stringify({ name: "t", version: "0.0.1" }));
+    try {
+      const r = await runCentralizedProgram({
+        programPath: NODE,
+        argv: [
+          "node",
+          NPM_CLI,
+          "install",
+          "express",
+          "--prefix", prefix,
+          "--cache", cache,
+          "--no-fund",
+          "--no-audit",
+          "--no-progress",
+        ],
+        env: [`HOME=${prefix}`, "PATH=/usr/bin:/bin"],
+        enableTcpNetwork: true,
+        timeout: 600_000,
+      });
+      expect(r.exitCode).toBe(0);
+      const pkg = JSON.parse(readFileSync(join(prefix, "node_modules/express/package.json"), "utf8"));
+      expect(pkg.name).toBe("express");
+      // express depends on accepts, body-parser, cookie, debug, ... — verify a sub-dep is present
+      expect(existsSync(join(prefix, "node_modules/accepts/package.json"))).toBe(true);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      rmSync(cache, { recursive: true, force: true });
+    }
+  });
+
+  it("`npm install vite@8` exercises native JSON.parse on a 38 MB packument and scoped deps", { timeout: 600_000 }, async () => {
+    const prefix = mkdtempSync(join(tmpdir(), "npm-vite-"));
+    const cache = mkdtempSync(join(tmpdir(), "npm-vite-cache-"));
+    writeFileSync(join(prefix, "package.json"), JSON.stringify({ name: "t", version: "0.0.1" }));
+    try {
+      const r = await runCentralizedProgram({
+        programPath: NODE,
+        argv: [
+          "node",
+          NPM_CLI,
+          "install",
+          "vite@8",
+          "--prefix", prefix,
+          "--cache", cache,
+          "--no-fund",
+          "--no-audit",
+          "--no-progress",
+        ],
+        env: [`HOME=${prefix}`, "PATH=/usr/bin:/bin"],
+        enableTcpNetwork: true,
+        timeout: 600_000,
+      });
+      expect(r.exitCode).toBe(0);
+      const pkg = JSON.parse(readFileSync(join(prefix, "node_modules/vite/package.json"), "utf8"));
+      expect(pkg.name).toBe("vite");
+      // vite 8 pulls in @rolldown (scoped — exercises the URL-parser fix for "@scope" paths).
+      expect(existsSync(join(prefix, "node_modules/@rolldown")) ||
+             existsSync(join(prefix, "node_modules/rolldown"))).toBe(true);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      rmSync(cache, { recursive: true, force: true });
+    }
+  });
 });

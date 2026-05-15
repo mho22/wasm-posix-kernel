@@ -42,6 +42,25 @@ if [ ! -d "$SRC_DIR" ]; then
     git clone --depth=1 --branch v0.12.1 https://github.com/quickjs-ng/quickjs.git "$SRC_DIR"
 fi
 
+# Apply local patches, skipping any already applied. Mirrors the pattern in
+# examples/libs/mariadb/build-mariadb.sh.
+PATCH_DIR="$SCRIPT_DIR/patches"
+if [ -d "$PATCH_DIR" ]; then
+    for patch in "$PATCH_DIR"/*.patch; do
+        [ -f "$patch" ] || continue
+        if patch -p1 -N --dry-run --silent -d "$SRC_DIR" < "$patch" 2>/dev/null; then
+            echo "  Applying $(basename "$patch")..."
+            patch -p1 -N -d "$SRC_DIR" < "$patch"
+        fi
+    done
+fi
+
+YYJSON_SRC_DIR="$SCRIPT_DIR/yyjson-src"
+if [ ! -d "$YYJSON_SRC_DIR" ]; then
+    echo "Cloning yyjson 0.10.0..."
+    git clone --depth=1 --branch 0.10.0 https://github.com/ibireme/yyjson.git "$YYJSON_SRC_DIR"
+fi
+
 mkdir -p "$BIN_DIR" "$GEN_DIR"
 
 echo "=== Building QuickJS-NG for wasm32 ==="
@@ -217,11 +236,14 @@ NODE_NATIVE_SRCS=(
     "$SCRIPT_DIR/node-compat-native/zlib.c"
     "$SCRIPT_DIR/node-compat-native/socket.c"
     "$SCRIPT_DIR/node-compat-native/tls.c"
+    "$SCRIPT_DIR/node-compat-native/json.c"
+    "$YYJSON_SRC_DIR/src/yyjson.c"
 )
 NODE_NATIVE_CFLAGS=(
     "${CFLAGS[@]}"
     -I"$OPENSSL_PREFIX/include"
     -I"$ZLIB_PREFIX/include"
+    -I"$YYJSON_SRC_DIR/src"
 )
 for src in "${NODE_NATIVE_SRCS[@]}"; do
     obj="$BIN_DIR/$(basename "${src%.c}.o")"

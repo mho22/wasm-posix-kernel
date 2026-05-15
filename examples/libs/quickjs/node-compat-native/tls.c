@@ -23,7 +23,11 @@ typedef struct {
     int      handshake_done;
 } TlsHandle;
 
-#define TLS_MAX_HANDLES 64
+/* npm install of mid-size dep trees (express ≈30 deps, each fetched as
+   manifest + tarball over keep-alive) routinely keeps 100+ TLS connections
+   open in parallel; 64 was empirically too small. 1024 entries × ~24 B is
+   ~24 KB of BSS — negligible. */
+#define TLS_MAX_HANDLES 1024
 static TlsHandle g_handles[TLS_MAX_HANDLES];
 static SSL_CTX  *g_default_ctx = NULL;
 static int       g_openssl_inited = 0;
