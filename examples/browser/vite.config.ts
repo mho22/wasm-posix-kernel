@@ -349,6 +349,7 @@ export default defineConfig({
         wordpress: path.resolve(__dirname, "pages/wordpress/index.html"),
         lamp: path.resolve(__dirname, "pages/lamp/index.html"),
         shell: path.resolve(__dirname, "pages/shell/index.html"),
+        node: path.resolve(__dirname, "pages/node/index.html"),
         "test-runner": path.resolve(__dirname, "pages/test-runner/index.html"),
         "git-test": path.resolve(__dirname, "pages/git-test/index.html"),
         "mariadb-test": path.resolve(__dirname, "pages/mariadb-test/index.html"),
