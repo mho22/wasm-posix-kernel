@@ -65,6 +65,7 @@ has_python_vfs() { [ -f "$REPO_ROOT/examples/browser/public/python.vfs" ]; }
 has_perl_vfs()   { [ -f "$REPO_ROOT/examples/browser/public/perl.vfs" ]; }
 has_shell_vfs()  { [ -f "$REPO_ROOT/examples/browser/public/shell.vfs" ]; }
 has_node_vfs()   { [ -f "$REPO_ROOT/examples/browser/public/node.vfs" ]; }
+has_pi_vfs()     { [ -f "$REPO_ROOT/examples/browser/public/pi.vfs" ]; }
 has_erlang()    { [ -f "$REPO_ROOT/examples/libs/erlang/bin/beam.wasm" ]; }
 has_erlang_vfs() { [ -f "$REPO_ROOT/examples/browser/public/erlang.vfs" ]; }
 has_lamp_vfs()   { [ -f "$REPO_ROOT/examples/browser/public/lamp.vfs" ]; }
@@ -433,6 +434,24 @@ build_node_vfs() {
         info "Node VFS image built"
     else
         info "Node VFS image"
+    fi
+}
+
+build_pi_vfs() {
+    if ! has_pi_vfs; then
+        if [ ! -f "$REPO_ROOT/examples/libs/npm/dist/bin/npm-cli.js" ]; then
+            warn "npm dist not found, skipping pi VFS image"
+            return
+        fi
+        if ! command -v npm >/dev/null 2>&1; then
+            warn "host npm not found, skipping pi VFS image"
+            return
+        fi
+        step "Building pi VFS image (host npm install + codemod)"
+        ( cd "$REPO_ROOT" && npx tsx examples/browser/scripts/build-pi-vfs-image.ts )
+        info "pi VFS image built"
+    else
+        info "pi VFS image"
     fi
 }
 
@@ -913,6 +932,7 @@ build_target() {
         perl-vfs)   build_perl_vfs ;;
         shell-vfs)  build_shell_vfs ;;
         node-vfs)   build_node_vfs ;;
+        pi-vfs)     build_pi_vfs ;;
         wordpress)  build_wordpress ;;
         wp-vfs)     build_wp_vfs ;;
         erlang)     build_erlang ;;
@@ -952,7 +972,7 @@ build_target() {
 }
 
 # All targets needed for browser demos
-BROWSER_DEPS=(kernel sysroot sysroot64 programs dash bash coreutils grep sed bc file less m4 make tar curl-cli wget gzip bzip2 xz zstd zip unzip nano vim nethack git nginx php php-fpm mariadb mariadb-vfs mariadb64 mariadb64-vfs redis cpython python-vfs perl perl-vfs ruby shell-vfs node-vfs wordpress wp-vfs lamp-vfs erlang erlang-vfs texlive texlive-vfs)
+BROWSER_DEPS=(kernel sysroot sysroot64 programs dash bash coreutils grep sed bc file less m4 make tar curl-cli wget gzip bzip2 xz zstd zip unzip nano vim nethack git nginx php php-fpm mariadb mariadb-vfs mariadb64 mariadb64-vfs redis cpython python-vfs perl perl-vfs ruby shell-vfs node-vfs pi-vfs wordpress wp-vfs lamp-vfs erlang erlang-vfs texlive texlive-vfs)
 
 build_browser() {
     for t in "${BROWSER_DEPS[@]}"; do
@@ -1002,6 +1022,7 @@ build_all() {
     build_ruby
     build_shell_vfs
     build_node_vfs
+    build_pi_vfs
     build_wordpress
     build_wp_vfs
     build_lamp_vfs
@@ -1118,6 +1139,9 @@ clean_target() {
         node-vfs)
             rm -f "$REPO_ROOT/examples/browser/public/node.vfs"
             warn "Cleaned Node VFS image" ;;
+        pi-vfs)
+            rm -f "$REPO_ROOT/examples/browser/public/pi.vfs"
+            warn "Cleaned pi VFS image" ;;
         wordpress)
             rm -rf "$REPO_ROOT/examples/wordpress/wordpress"
             warn "Cleaned WordPress" ;;
@@ -1556,6 +1580,7 @@ cmd_list() {
     echo "  perl-vfs    Perl stdlib VFS image                 $(has_perl_vfs && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○${RESET}")"
     echo "  shell-vfs   Shell environment VFS image           $(has_shell_vfs && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○${RESET}")"
     echo "  node-vfs    Node + npm VFS image                  $(has_node_vfs && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○${RESET}")"
+    echo "  pi-vfs Pi VFS image                   $(has_pi_vfs && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○${RESET}")"
     echo "  wordpress   WordPress + SQLite plugin             $(has_wordpress && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○${RESET}")"
     echo "  wp-vfs      WordPress VFS image                   $(has_wp_vfs && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○${RESET}")"
     echo "  lamp-vfs    WordPress LAMP VFS image              $(has_lamp_vfs && echo "${GREEN}✓${RESET}" || echo "${YELLOW}○${RESET}")"
