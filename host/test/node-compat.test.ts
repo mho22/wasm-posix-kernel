@@ -236,6 +236,7 @@ describe.skipIf(!hasNode)("Node.js compat (node.wasm) — dynamic TTY", () => {
   async function runUnderPty(
     src: string,
     drive: (h: NodeKernelHost, getPid: () => number, waitFor: (s: string) => Promise<void>) => Promise<void>,
+    spawnOpts: { ptyCols?: number; ptyRows?: number } = {},
   ): Promise<{ exitCode: number; out: string }> {
     let out = "";
     const host = new NodeKernelHost({
@@ -259,6 +260,7 @@ describe.skipIf(!hasNode)("Node.js compat (node.wasm) — dynamic TTY", () => {
     let pid = -1;
     const exitPromise = host.spawn(loadBytes(nodeWasm), ["node", "-e", src], {
       pty: true,
+      ...spawnOpts,
       onStarted: (p) => { pid = p; },
     });
 
@@ -325,6 +327,43 @@ describe.skipIf(!hasNode)("Node.js compat (node.wasm) — dynamic TTY", () => {
 
     expect(out).toContain("READY isRaw=true");
     expect(out).toContain("GOT:1 byte=97");
+    expect(exitCode).toBe(0);
+  }, 30_000);
+
+  it("pre-spawn ptyCols/ptyRows are visible to the program at startup", async () => {
+    const src = [
+      "process.stdout.write('A ' + process.stdout.columns + 'x' + process.stdout.rows + '\\n');",
+      "process.exit(0);",
+    ].join(" ");
+
+    const { exitCode, out } = await runUnderPty(
+      src,
+      async (_host, _getPid, waitFor) => { await waitFor("A "); },
+      { ptyCols: 142, ptyRows: 38 },
+    );
+
+    expect(out).toContain("A 142x38");
+    expect(exitCode).toBe(0);
+  }, 30_000);
+
+  it("process.stdout.on('resize') fires with the new dimensions after ptyResize", async () => {
+    const src = [
+      "process.stdout.write('READY\\n');",
+      "process.stdout.on('resize', () => {",
+      "  process.stdout.write('R ' + process.stdout.columns + 'x' + process.stdout.rows + '\\n');",
+      "  process.exit(0);",
+      "});",
+      // Keep the event loop alive until SIGWINCH lands.
+      "setTimeout(() => process.exit(1), 5000);",
+    ].join(" ");
+
+    const { exitCode, out } = await runUnderPty(src, async (host, getPid, waitFor) => {
+      await waitFor("READY");
+      host.ptyResize(getPid(), 38, 142);
+      await waitFor("R ");
+    });
+
+    expect(out).toContain("R 142x38");
     expect(exitCode).toBe(0);
   }, 30_000);
 });

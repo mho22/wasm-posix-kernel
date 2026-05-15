@@ -5310,8 +5310,14 @@ pub fn sys_poll(
         return Ok(ready);
     }
 
-    // Centralized mode: return EAGAIN so the host JS can retry asynchronously
+    // Centralized mode: return EAGAIN so the host JS can retry asynchronously.
+    // A deliverable signal on the retry path becomes EINTR — mirrors the
+    // traditional loop below, and lets the wasm process exit poll() to dispatch
+    // JS signal handlers instead of looping on EAGAIN forever.
     if crate::is_centralized_mode() {
+        if proc.signals.deliverable() != 0 && !proc.signals.should_restart() {
+            return Err(Errno::EINTR);
+        }
         return Err(Errno::EAGAIN);
     }
 
