@@ -5,6 +5,7 @@
 #include "hmac.h"
 #include "zlib.h"
 #include "socket.h"
+#include "tls.h"
 
 static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("createHash", 1, js_node_native_create_hash),
@@ -21,6 +22,10 @@ static const JSCFunctionListEntry node_native_funcs[] = {
     JS_CFUNC_DEF("socketRead", 2, js_node_native_socket_read),
     JS_CFUNC_DEF("socketWrite", 2, js_node_native_socket_write),
     JS_CFUNC_DEF("socketClose", 1, js_node_native_socket_close),
+    JS_CFUNC_DEF("tlsConnect", 3, js_node_native_tls_connect),
+    JS_CFUNC_DEF("tlsRead", 2, js_node_native_tls_read),
+    JS_CFUNC_DEF("tlsWrite", 2, js_node_native_tls_write),
+    JS_CFUNC_DEF("tlsClose", 1, js_node_native_tls_close),
 };
 
 static int node_native_module_init(JSContext *ctx, JSModuleDef *m)

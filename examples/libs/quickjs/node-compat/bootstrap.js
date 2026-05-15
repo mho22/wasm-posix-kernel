@@ -2346,6 +2346,142 @@ const http = (() => {
 })();
 
 // ============================================================
+// tls module — TLSSocket via libssl in the wasm sysroot
+// ============================================================
+
+const tls = (() => {
+    const nat = _nodeNative;
+    const toU8 = (b) => {
+        if (b instanceof Uint8Array) return b;
+        if (b instanceof ArrayBuffer) return new Uint8Array(b);
+        if (typeof b === 'string') return Buffer.from(b, 'utf8');
+        throw new TypeError('tls: chunk must be Buffer, Uint8Array, ArrayBuffer, or string');
+    };
+
+    /* TLSSocket layers SSL_read/SSL_write over a fd that net.Socket has
+       already TCP-connected. The underlying fd is owned by the TLS handle
+       once handshake starts — close routes through tlsClose. */
+    class TLSSocket extends stream.Duplex {
+        constructor(options) {
+            super(options);
+            this._tlsHandle = -1;
+            this._tlsDestroyed = false;
+            this._reading = false;
+            this._writeQueue = [];
+            this._handshakePending = true;
+            this.servername = options?.servername || null;
+            this.authorized = false;
+        }
+
+        _attach(fd, servername, opts) {
+            const ca = typeof opts?.ca === 'string'
+                ? opts.ca
+                : (Buffer.isBuffer?.(opts?.ca) ? opts.ca.toString('utf8') : undefined);
+            const rejectUnauthorized = opts?.rejectUnauthorized !== false;
+            this.servername = servername;
+            nat.tlsConnect(fd, servername, { ca, rejectUnauthorized }).then(
+                (handle) => {
+                    if (this._tlsDestroyed) { nat.tlsClose(handle); return; }
+                    this._tlsHandle = handle;
+                    this._handshakePending = false;
+                    this.authorized = rejectUnauthorized;
+                    this.emit('secureConnect');
+                    this._scheduleRead();
+                    this._flushWriteQueue();
+                },
+                (err) => { this._handshakePending = false; this.destroy(err); },
+            );
+        }
+
+        _scheduleRead() {
+            if (this._tlsHandle < 0 || this._tlsDestroyed || this._reading) return;
+            this._reading = true;
+            nat.tlsRead(this._tlsHandle, 64 * 1024).then(
+                (ab) => {
+                    this._reading = false;
+                    if (this._tlsDestroyed) return;
+                    if (ab.byteLength === 0) { this.push(null); return; }
+                    this.push(Buffer.from(ab));
+                    this._scheduleRead();
+                },
+                (err) => {
+                    this._reading = false;
+                    if (!this._tlsDestroyed) this.destroy(err);
+                },
+            );
+        }
+
+        _read() { /* push happens proactively in _scheduleRead */ }
+
+        _write(chunk, _encoding, cb) {
+            const buf = toU8(chunk);
+            if (this._tlsHandle < 0) {
+                this._writeQueue.push({ buf, cb });
+                return;
+            }
+            nat.tlsWrite(this._tlsHandle, buf).then(() => cb(null), cb);
+        }
+
+        _flushWriteQueue() {
+            const q = this._writeQueue;
+            this._writeQueue = [];
+            for (const { buf, cb } of q) {
+                nat.tlsWrite(this._tlsHandle, buf).then(() => cb(null), cb);
+            }
+        }
+
+        destroy(err) {
+            if (this._tlsDestroyed) return this;
+            this._tlsDestroyed = true;
+            if (this._tlsHandle >= 0) {
+                nat.tlsClose(this._tlsHandle);
+                this._tlsHandle = -1;
+            }
+            for (const { cb } of this._writeQueue) cb(err || new Error('tls socket destroyed'));
+            this._writeQueue = [];
+            if (err) this.emit('error', err);
+            this.emit('close', !!err);
+            return this;
+        }
+
+        setEncoding(enc) { this._encoding = enc; return this; }
+        setTimeout(ms, cb) { if (cb) this.once('timeout', cb); return this; }
+        setNoDelay() { return this; }
+        setKeepAlive() { return this; }
+        ref() { return this; }
+        unref() { return this; }
+        getProtocol() { return this._tlsHandle >= 0 ? 'TLSv1.3' : null; }
+        getPeerCertificate() { return {}; }
+    }
+
+    function connect(options, cb) {
+        if (typeof options === 'number') {
+            /* (port, host?, opts?, cb?) Node-style overloads. */
+            const port = options;
+            const host = (typeof arguments[1] === 'string') ? arguments[1] : 'localhost';
+            const o2 = (typeof arguments[2] === 'object') ? arguments[2] : {};
+            const cb2 = (typeof arguments[arguments.length - 1] === 'function')
+                ? arguments[arguments.length - 1] : null;
+            options = Object.assign({ host, port }, o2);
+            if (cb2) cb = cb2;
+        }
+        const sock = new TLSSocket(options);
+        if (cb) sock.once('secureConnect', cb);
+        const servername = options.servername || options.host || 'localhost';
+        nat.socketConnect(options.host || 'localhost', options.port).then(
+            (fd) => {
+                if (sock._tlsDestroyed) { nat.socketClose(fd); return; }
+                sock._attach(fd, servername, options);
+            },
+            (err) => sock.destroy(err),
+        );
+        return sock;
+    }
+
+    return { connect, TLSSocket };
+})();
+
+// ============================================================
 // Module system (require/module)
 // ============================================================
 
@@ -2366,8 +2502,9 @@ const _builtinModules = {
     'child_process': child_process,
     'crypto': crypto,
     'net': net,
+    'tls': tls,
     'http': http,
-    'https': http,  // alias (no TLS distinction in this env)
+    'https': http,  // alias — real https comes in the http/https split slice
     'zlib': (() => {
         const z = _nodeNative;
         const toU8 = (b) => {
