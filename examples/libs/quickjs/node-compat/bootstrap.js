@@ -2309,43 +2309,6 @@ const net = (() => {
 })();
 
 // ============================================================
-// http module (minimal stubs)
-// ============================================================
-
-const http = (() => {
-    const STATUS_CODES = {
-        200: 'OK', 201: 'Created', 204: 'No Content',
-        301: 'Moved Permanently', 302: 'Found', 304: 'Not Modified',
-        400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
-        404: 'Not Found', 405: 'Method Not Allowed',
-        500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable',
-    };
-
-    const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'];
-
-    return {
-        STATUS_CODES, METHODS,
-        createServer(options, handler) {
-            if (typeof options === 'function') { handler = options; options = {}; }
-            const server = net.createServer();
-            if (handler) server.on('request', handler);
-            return server;
-        },
-        request(options, cb) {
-            // TODO: implement actual HTTP client
-            return new net.Socket();
-        },
-        get(options, cb) {
-            const req = http.request(options, cb);
-            req.end();
-            return req;
-        },
-        Agent: class Agent {},
-        globalAgent: {},
-    };
-})();
-
-// ============================================================
 // tls module — TLSSocket via libssl in the wasm sysroot
 // ============================================================
 
@@ -2482,6 +2445,578 @@ const tls = (() => {
 })();
 
 // ============================================================
+// http / https modules — real HTTP/1.1 over net.Socket (http) and tls.TLSSocket (https)
+//
+// Single-source parser; the http vs https split is just the transport
+// factory we hand the request constructor. Mirrors Node's surface enough
+// for npm: ClientRequest extends Writable, IncomingMessage extends
+// Readable, headers are stored case-insensitively, body modes are
+// Content-Length / Transfer-Encoding: chunked / connection-close.
+// ============================================================
+
+const STATUS_CODES = {
+    100: 'Continue', 101: 'Switching Protocols',
+    200: 'OK', 201: 'Created', 202: 'Accepted', 204: 'No Content',
+    301: 'Moved Permanently', 302: 'Found', 303: 'See Other',
+    304: 'Not Modified', 307: 'Temporary Redirect', 308: 'Permanent Redirect',
+    400: 'Bad Request', 401: 'Unauthorized', 403: 'Forbidden',
+    404: 'Not Found', 405: 'Method Not Allowed', 408: 'Request Timeout',
+    409: 'Conflict', 410: 'Gone', 411: 'Length Required',
+    413: 'Payload Too Large', 414: 'URI Too Long', 415: 'Unsupported Media Type',
+    429: 'Too Many Requests',
+    500: 'Internal Server Error', 501: 'Not Implemented', 502: 'Bad Gateway',
+    503: 'Service Unavailable', 504: 'Gateway Timeout',
+};
+
+const HTTP_METHODS = [
+    'GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'CONNECT', 'TRACE',
+];
+
+/* IncomingMessage parser — single instance per ClientRequest. Bytes from
+   the socket arrive via feed() and trigger onHeaders / message.push().
+   The parser owns the IncomingMessage and is the only thing that should
+   call message.push(). */
+function makeResponseParser({ onHeaders, onError }) {
+    let state = 'STATUS'; // STATUS | HEADERS | BODY
+    let textBuf = '';     // latin1 buffer for status/headers
+    let message = null;
+    let bodyMode = null;  // 'length' | 'chunked' | 'close' | 'none'
+    let bodyRemaining = 0;
+    let chunkPhase = 'size'; // size | data | data-trailer | trailer
+    let chunkRemaining = 0;
+    let chunkAcc = '';
+    let trailerAcc = '';
+    let completed = false;
+
+    function bytesToLatin1(u8) {
+        let s = '';
+        for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+        return s;
+    }
+    function latin1ToBytes(s) {
+        const u8 = new Uint8Array(s.length);
+        for (let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i) & 0xff;
+        return u8;
+    }
+
+    function complete() {
+        if (completed) return;
+        completed = true;
+        if (message) message.complete = true;
+        if (message) message.push(null);
+    }
+
+    function setupBodyMode() {
+        const sc = message.statusCode;
+        const cl = message.headers['content-length'];
+        const te = message.headers['transfer-encoding'];
+        // RFC 7230: 1xx, 204, 304 — no body regardless of headers.
+        if ((sc >= 100 && sc < 200) || sc === 204 || sc === 304) {
+            bodyMode = 'none';
+            return;
+        }
+        if (te && /chunked/i.test(te)) {
+            bodyMode = 'chunked'; chunkPhase = 'size'; chunkAcc = '';
+        } else if (cl !== undefined) {
+            const n = parseInt(cl, 10);
+            if (Number.isFinite(n) && n >= 0) {
+                bodyMode = 'length';
+                bodyRemaining = n;
+            } else {
+                bodyMode = 'close';
+            }
+        } else {
+            bodyMode = 'close';
+        }
+    }
+
+    function parseStatusLine(line) {
+        // "HTTP/1.1 200 OK" — message may be empty.
+        const m = /^HTTP\/(\d+)\.(\d+)[ \t]+(\d{3})(?:[ \t]+(.*))?$/.exec(line);
+        if (!m) throw new Error('http: malformed status line: ' + JSON.stringify(line));
+        message.httpVersionMajor = parseInt(m[1], 10);
+        message.httpVersionMinor = parseInt(m[2], 10);
+        message.httpVersion = `${m[1]}.${m[2]}`;
+        message.statusCode = parseInt(m[3], 10);
+        message.statusMessage = m[4] || STATUS_CODES[message.statusCode] || '';
+    }
+
+    function pushHeader(line) {
+        const colon = line.indexOf(':');
+        if (colon < 0) return; // tolerate
+        const name = line.slice(0, colon).trim();
+        const value = line.slice(colon + 1).trim();
+        const lk = name.toLowerCase();
+        message.rawHeaders.push(name, value);
+        if (lk === 'set-cookie') {
+            if (Array.isArray(message.headers[lk])) message.headers[lk].push(value);
+            else message.headers[lk] = [value];
+        } else if (message.headers[lk] !== undefined) {
+            message.headers[lk] += ', ' + value;
+        } else {
+            message.headers[lk] = value;
+        }
+    }
+
+    function parseChunked(u8) {
+        let i = 0;
+        while (i < u8.length) {
+            if (chunkPhase === 'size') {
+                while (i < u8.length) {
+                    chunkAcc += String.fromCharCode(u8[i++]);
+                    if (chunkAcc.endsWith('\r\n')) {
+                        const sizeStr = chunkAcc.slice(0, -2).split(';')[0].trim();
+                        chunkRemaining = parseInt(sizeStr, 16);
+                        if (!Number.isFinite(chunkRemaining) || chunkRemaining < 0) {
+                            throw new Error('http: bad chunk size: ' + sizeStr);
+                        }
+                        chunkAcc = '';
+                        chunkPhase = (chunkRemaining === 0) ? 'trailer' : 'data';
+                        break;
+                    }
+                }
+            } else if (chunkPhase === 'data') {
+                const n = Math.min(u8.length - i, chunkRemaining);
+                if (n > 0) {
+                    message.push(Buffer.from(u8.subarray(i, i + n)));
+                    i += n;
+                    chunkRemaining -= n;
+                }
+                if (chunkRemaining === 0) {
+                    chunkPhase = 'data-trailer';
+                    trailerAcc = '';
+                }
+            } else if (chunkPhase === 'data-trailer') {
+                while (i < u8.length) {
+                    trailerAcc += String.fromCharCode(u8[i++]);
+                    if (trailerAcc === '\r\n') {
+                        chunkPhase = 'size';
+                        chunkAcc = '';
+                        trailerAcc = '';
+                        break;
+                    }
+                    if (trailerAcc.length > 2 || (trailerAcc.length === 1 && trailerAcc !== '\r')) {
+                        throw new Error('http: bad chunk trailer');
+                    }
+                }
+            } else if (chunkPhase === 'trailer') {
+                // Either "\r\n" (no trailers) or trailer headers ending in "\r\n\r\n".
+                while (i < u8.length) {
+                    chunkAcc += String.fromCharCode(u8[i++]);
+                    if (chunkAcc === '\r\n') {
+                        complete();
+                        return;
+                    }
+                    if (chunkAcc.endsWith('\r\n\r\n')) {
+                        complete();
+                        return;
+                    }
+                    if (chunkAcc.length > 65536) {
+                        throw new Error('http: chunked trailer too large');
+                    }
+                }
+            }
+        }
+    }
+
+    function parseBody(u8) {
+        if (completed || !message) return;
+        if (bodyMode === 'none') {
+            complete();
+            return;
+        }
+        if (bodyMode === 'length') {
+            const n = Math.min(u8.length, bodyRemaining);
+            if (n > 0) {
+                message.push(Buffer.from(u8.subarray(0, n)));
+                bodyRemaining -= n;
+            }
+            if (bodyRemaining === 0) complete();
+        } else if (bodyMode === 'close') {
+            if (u8.length > 0) message.push(Buffer.from(u8));
+        } else if (bodyMode === 'chunked') {
+            parseChunked(u8);
+        }
+    }
+
+    return {
+        get message() { return message; },
+        get completed() { return completed; },
+        feed(u8) {
+            try {
+                if (state === 'STATUS' || state === 'HEADERS') {
+                    textBuf += bytesToLatin1(u8);
+                    while (true) {
+                        const idx = textBuf.indexOf('\r\n');
+                        if (idx < 0) return;
+                        const line = textBuf.slice(0, idx);
+                        textBuf = textBuf.slice(idx + 2);
+                        if (state === 'STATUS') {
+                            message = makeIncomingMessage();
+                            parseStatusLine(line);
+                            state = 'HEADERS';
+                        } else if (state === 'HEADERS') {
+                            if (line === '') {
+                                setupBodyMode();
+                                state = 'BODY';
+                                onHeaders(message);
+                                // Bodyless responses (no-body status, or
+                                // Content-Length: 0) complete immediately —
+                                // no further bytes needed.
+                                if (bodyMode === 'none'
+                                    || (bodyMode === 'length' && bodyRemaining === 0)) {
+                                    complete();
+                                    return;
+                                }
+                                if (textBuf.length > 0) {
+                                    const rest = latin1ToBytes(textBuf);
+                                    textBuf = '';
+                                    parseBody(rest);
+                                }
+                                return;
+                            }
+                            pushHeader(line);
+                        }
+                    }
+                } else {
+                    parseBody(u8);
+                }
+            } catch (err) {
+                onError(err);
+            }
+        },
+        end() {
+            // Socket closed. For mode=close, this is the natural EOF.
+            if (state === 'BODY' && bodyMode === 'close') {
+                complete();
+            } else if (state === 'BODY' && !completed) {
+                onError(new Error('http: connection closed before body completion'));
+            } else if (state !== 'BODY') {
+                onError(new Error('http: connection closed before headers'));
+            }
+        },
+    };
+}
+
+function makeIncomingMessage() {
+    const msg = new stream.Readable();
+    msg.headers = Object.create(null);
+    msg.rawHeaders = [];
+    msg.trailers = Object.create(null);
+    msg.rawTrailers = [];
+    msg.httpVersion = '1.1';
+    msg.httpVersionMajor = 1;
+    msg.httpVersionMinor = 1;
+    msg.statusCode = 0;
+    msg.statusMessage = '';
+    msg.complete = false;
+    msg.url = '';
+    msg.method = null;
+    return msg;
+}
+
+function makeHttpModule({ connect, defaultPort, defaultProtocol }) {
+    const protoLower = defaultProtocol.toLowerCase();
+
+    /* Normalize every supported `request()` argument shape into a flat
+       options object. Accepts: URL string, WHATWG URL, Node-style
+       options, plus the common (urlString, options, cb) overload. */
+    function normalize(input, maybeOpts, maybeCb) {
+        let opts = {};
+        let cb = null;
+        if (typeof input === 'string') {
+            const u = url.parse(input);
+            opts.protocol = u.protocol;
+            opts.hostname = u.hostname;
+            if (u.port) opts.port = parseInt(u.port, 10);
+            opts.path = (u.pathname || '/') + (u.search || '');
+        } else if (input && typeof input === 'object' && typeof input.href === 'string'
+                   && typeof input.pathname === 'string') {
+            // WHATWG URL or url.parse() output.
+            opts.protocol = input.protocol;
+            opts.hostname = input.hostname;
+            if (input.port) opts.port = parseInt(input.port, 10);
+            opts.path = (input.pathname || '/') + (input.search || '');
+        }
+        if (input && typeof input === 'object' && !(typeof input.href === 'string')) {
+            // Plain options object.
+            Object.assign(opts, input);
+        }
+        if (typeof maybeOpts === 'object' && maybeOpts !== null) {
+            Object.assign(opts, maybeOpts);
+        }
+        if (typeof maybeOpts === 'function') cb = maybeOpts;
+        if (typeof maybeCb === 'function') cb = maybeCb;
+        return { opts, cb };
+    }
+
+    class ClientRequest extends stream.Writable {
+        constructor(opts, cb) {
+            super();
+            this.method = (opts.method || 'GET').toUpperCase();
+            this.path = opts.path || '/';
+            this._host = opts.hostname || opts.host || 'localhost';
+            this._port = opts.port != null ? parseInt(opts.port, 10) : defaultPort;
+            this._protocol = (opts.protocol || protoLower).toLowerCase();
+            // Header storage: case-insensitive lookup, original-case serialization.
+            this._headerNames = Object.create(null); // lower -> original
+            this._headerValues = Object.create(null); // lower -> value
+
+            if (opts.headers) {
+                for (const k of Object.keys(opts.headers)) {
+                    this.setHeader(k, opts.headers[k]);
+                }
+            }
+            if (!this.getHeader('host')) {
+                const portStr = this._port === defaultPort ? '' : `:${this._port}`;
+                this.setHeader('Host', this._host + portStr);
+            }
+            if (!this.getHeader('connection')) {
+                this.setHeader('Connection', 'close');
+            }
+            // Pass-through TLS options for redirected calls and the initial connect.
+            this._tlsOpts = {
+                ca: opts.ca,
+                rejectUnauthorized: opts.rejectUnauthorized,
+                servername: opts.servername || this._host,
+            };
+
+            // Redirect knobs are non-Node extensions but the handoff explicitly
+            // calls for them; keep off-by-default to mirror standard http.request.
+            this._followRedirects = opts.followRedirects === true;
+            this._maxRedirects = opts.maxRedirects ?? 10;
+            this._redirectCount = opts.__redirectCount || 0;
+
+            this._socket = null;
+            this._connected = false;
+            this._headersSent = false;
+            this._destroyed = false;
+            this._redirected = false;
+            this._pendingBody = []; // chunks buffered until socket is connected
+
+            if (cb) this.once('response', cb);
+            this._origCb = cb;
+
+            queueMicrotask(() => {
+                if (this._destroyed) return;
+                this._openSocket();
+            });
+        }
+
+        setHeader(name, value) {
+            const lk = name.toLowerCase();
+            this._headerNames[lk] = name;
+            this._headerValues[lk] = String(value);
+        }
+        getHeader(name) { return this._headerValues[name.toLowerCase()]; }
+        getHeaders() {
+            const out = Object.create(null);
+            for (const lk of Object.keys(this._headerValues)) out[lk] = this._headerValues[lk];
+            return out;
+        }
+        removeHeader(name) {
+            const lk = name.toLowerCase();
+            delete this._headerNames[lk];
+            delete this._headerValues[lk];
+        }
+
+        _openSocket() {
+            const sock = connect({
+                host: this._host,
+                port: this._port,
+                ca: this._tlsOpts.ca,
+                rejectUnauthorized: this._tlsOpts.rejectUnauthorized,
+                servername: this._tlsOpts.servername,
+            });
+            this._socket = sock;
+
+            const parser = makeResponseParser({
+                onHeaders: (msg) => this._onHeaders(msg),
+                onError: (err) => this._failed(err),
+            });
+            this._parser = parser;
+
+            sock.on('data', (chunk) => parser.feed(chunk));
+            sock.on('end', () => parser.end());
+            sock.on('error', (err) => this._failed(err));
+            sock.on('close', () => {
+                if (!parser.completed) parser.end();
+            });
+
+            // net.Socket emits 'connect'; tls.TLSSocket emits 'secureConnect'.
+            // Listen for both — only one will fire per transport.
+            const onReady = () => {
+                if (this._destroyed) return;
+                this._connected = true;
+                this._sendHeaders();
+                for (const buf of this._pendingBody) this._socket.write(buf);
+                this._pendingBody = [];
+            };
+            sock.once('connect', onReady);
+            sock.once('secureConnect', onReady);
+        }
+
+        _sendHeaders() {
+            if (this._headersSent) return;
+            this._headersSent = true;
+            let req = `${this.method} ${this.path} HTTP/1.1\r\n`;
+            for (const lk of Object.keys(this._headerValues)) {
+                req += `${this._headerNames[lk]}: ${this._headerValues[lk]}\r\n`;
+            }
+            req += '\r\n';
+            this._socket.write(Buffer.from(req, 'utf8'));
+        }
+
+        _write(chunk, encoding, cb) {
+            if (this._destroyed) return cb(new Error('http: request destroyed'));
+            const buf = (chunk instanceof Uint8Array) ? Buffer.from(chunk)
+                : (typeof chunk === 'string') ? Buffer.from(chunk, encoding || 'utf8')
+                : Buffer.from(chunk);
+            if (!this._connected) {
+                this._pendingBody.push(buf);
+                return cb();
+            }
+            this._sendHeaders();
+            this._socket.write(buf);
+            cb();
+        }
+
+        end(chunk, encoding, cb) {
+            if (typeof chunk === 'function') { cb = chunk; chunk = undefined; }
+            if (typeof encoding === 'function') { cb = encoding; encoding = undefined; }
+            if (chunk) this.write(chunk, encoding);
+            if (this._connected) this._sendHeaders();
+            this._writableState.ended = true;
+            this.emit('finish');
+            if (cb) cb();
+            return this;
+        }
+
+        _onHeaders(msg) {
+            if (this._destroyed) return;
+            // Auto-redirect (opt-in).
+            if (this._followRedirects
+                && msg.statusCode >= 300 && msg.statusCode < 400
+                && msg.headers.location
+                && this._redirectCount < this._maxRedirects) {
+                const loc = msg.headers.location;
+                this._redirectTo(loc, msg);
+                return;
+            }
+            // Drain the parser into the message even after we hand it off.
+            this.emit('response', msg);
+        }
+
+        _redirectTo(location, _prev) {
+            // Mark first so the synchronous 'close' fired by socket.destroy()
+            // doesn't surface a phantom "connection closed before body" error.
+            this._redirected = true;
+            try {
+                if (this._socket) this._socket.destroy();
+            } catch (_) { /* ignore */ }
+            // Resolve relative redirects against the current request URL.
+            const baseHref = `${this._protocol}//${this._host}${this._port === defaultPort ? '' : ':' + this._port}${this.path}`;
+            const absUrl = url.resolve(baseHref, location);
+            const u = url.parse(absUrl);
+            const targetProto = (u.protocol || this._protocol).toLowerCase();
+            // Same-scheme redirects only — cross-scheme (http→https) is out of scope
+            // for this slice. Real CDNs do upgrade-to-https; if Phase 5 hits one,
+            // wire a cross-module registry back in.
+            if (targetProto !== this._protocol) {
+                this._failed(new Error('http: cross-scheme redirect not supported: ' + targetProto));
+                return;
+            }
+            // Carry the original SNI through. Same-origin redirects (the
+            // common case for npm-style flows) preserve cert validity that
+            // way; cross-origin redirects are not in scope for this slice.
+            const newOpts = {
+                protocol: targetProto,
+                hostname: u.hostname || this._host,
+                port: u.port ? parseInt(u.port, 10) : undefined,
+                path: (u.pathname || '/') + (u.search || ''),
+                method: this.method,
+                headers: this.getHeaders(),
+                ca: this._tlsOpts.ca,
+                rejectUnauthorized: this._tlsOpts.rejectUnauthorized,
+                servername: this._tlsOpts.servername,
+                followRedirects: true,
+                maxRedirects: this._maxRedirects,
+                __redirectCount: this._redirectCount + 1,
+            };
+            // The Host header must update for the new origin.
+            delete newOpts.headers['host'];
+            const next = request(newOpts);
+            next.on('response', (msg) => this.emit('response', msg));
+            next.on('error', (err) => this.emit('error', err));
+            next.end();
+        }
+
+        _failed(err) {
+            if (this._destroyed || this._redirected) return;
+            this._destroyed = true;
+            this.emit('error', err);
+        }
+
+        abort() { this.destroy(); }
+        destroy(err) {
+            if (this._destroyed) return this;
+            this._destroyed = true;
+            try { if (this._socket) this._socket.destroy(); } catch (_) { /* ignore */ }
+            if (err) this.emit('error', err);
+            return this;
+        }
+
+        setTimeout(_ms, cb) { if (cb) this.once('timeout', cb); return this; }
+        setNoDelay() { return this; }
+        setSocketKeepAlive() { return this; }
+        flushHeaders() { /* deferred until connect */ }
+    }
+
+    function request(input, maybeOpts, maybeCb) {
+        const { opts, cb } = normalize(input, maybeOpts, maybeCb);
+        return new ClientRequest(opts, cb);
+    }
+    function get(input, maybeOpts, maybeCb) {
+        const req = request(input, maybeOpts, maybeCb);
+        req.end();
+        return req;
+    }
+
+    return {
+        STATUS_CODES, METHODS: HTTP_METHODS,
+        request, get,
+        ClientRequest,
+        Agent: class Agent {},
+        globalAgent: {},
+        createServer() {
+            throw new Error('http.createServer is not yet implemented (Phase 4 part 2 shipped client-side only)');
+        },
+    };
+}
+
+const http = makeHttpModule({
+    connect: (opts) => {
+        const sock = new net.Socket();
+        sock.connect(opts.port || 80, opts.host || 'localhost');
+        return sock;
+    },
+    defaultPort: 80,
+    defaultProtocol: 'http:',
+});
+
+const https = makeHttpModule({
+    connect: (opts) => tls.connect({
+        host: opts.host || 'localhost',
+        port: opts.port || 443,
+        ca: opts.ca,
+        rejectUnauthorized: opts.rejectUnauthorized,
+        servername: opts.servername || opts.host || 'localhost',
+    }),
+    defaultPort: 443,
+    defaultProtocol: 'https:',
+});
+
+// ============================================================
 // Module system (require/module)
 // ============================================================
 
@@ -2504,7 +3039,7 @@ const _builtinModules = {
     'net': net,
     'tls': tls,
     'http': http,
-    'https': http,  // alias — real https comes in the http/https split slice
+    'https': https,
     'zlib': (() => {
         const z = _nodeNative;
         const toU8 = (b) => {

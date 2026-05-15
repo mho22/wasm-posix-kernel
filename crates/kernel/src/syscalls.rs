@@ -116,6 +116,28 @@ fn match_virtual_device(path: &[u8]) -> Option<VirtualDevice> {
     }
 }
 
+/// Sentinel host_handle for synthetic in-kernel files (/etc/passwd, etc.).
+const SYNTHETIC_FILE_HANDLE: i64 = -100;
+
+/// Mozilla CA root bundle, vendored from <https://curl.se/ca/cacert.pem>.
+/// Served at `/etc/ssl/cert.pem` so OpenSSL's `SSL_CTX_set_default_verify_paths`
+/// (which the wasm sysroot was built with `--openssldir=/etc/ssl`) finds a
+/// trust store without depending on the host filesystem. ~220 KB, refreshed
+/// manually via `examples/libs/openssl/fetch-cacert.sh`.
+const CACERT_PEM: &[u8] = include_bytes!("../../../examples/libs/openssl/cacert.pem");
+
+/// Return static content for synthetic /etc files.
+/// These provide a minimal POSIX environment (user/group database, DNS, TLS roots).
+fn synthetic_file_content(path: &[u8]) -> Option<&'static [u8]> {
+    match path {
+        b"/etc/passwd" => Some(b"root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:user:/home/user:/bin/sh\n"),
+        b"/etc/group" => Some(b"root:x:0:\nuser:x:1000:\n"),
+        b"/etc/hosts" => Some(b"127.0.0.1\tlocalhost\n::1\tlocalhost\n"),
+        b"/etc/ssl/cert.pem" => Some(CACERT_PEM),
+        _ => None,
+    }
+}
+
 /// Check if path is a /dev/fd/N or /dev/stdin|stdout|stderr alias.
 /// Returns Some(target_fd) if so.
 fn match_dev_fd(path: &[u8]) -> Option<i32> {

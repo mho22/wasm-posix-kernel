@@ -43,10 +43,12 @@ The bridge is **one** new QuickJS C native module exposing four namespaces (`has
 | 1  | 1 | `feat(quickjs-node): real SHA-256/512 via libcrypto` |
 | 2  | 2 | `feat(quickjs-node): real gzip/inflate via libz` |
 | 3  | 3 | `feat(quickjs-node): real AF_INET sockets + event-loop fd-watch` |
-| 4  | 4 | `feat(quickjs-node): TLS via OpenSSL — https.get works` |
+| 4a | 4 | `feat(quickjs): tls.connect via libssl in the wasm sysroot — Phase 4 part 1` |
+| 4b | 4 | `feat(quickjs): real http/https + Mozilla cacert.pem at /etc/ssl/cert.pem — Phase 4 part 2` |
 | 5  | 5 | `feat(quickjs-node): npm install of zero-dep package` |
 | 6  | 6 | `feat(quickjs-node): npm install of express + vite` |
-| 7+ | 7+ | (decision point — see Phase 7) |
+| 7  | 7 | `feat(quickjs-node,browser): node.wasm runs in the browser demo` |
+| 8+ | 8+ | (decision point — see Phase 8) |
 
 **Branching convention.** All branches in this track are prefixed `explore-node-wasm-` and **stack on the previous branch in the series**, never on `main`. Nothing in this track lands on `main` directly — each PR is reviewed against its predecessor. The chain so far:
 
@@ -1899,7 +1901,63 @@ List packages that fail and why (native addons, worker_threads, etc.). Set expec
 
 ---
 
-## Phase 7+ — Decision point
+## Phase 7 — Browser demo — `feat(quickjs-node,browser): node.wasm runs in the browser demo`
+
+**Goal:** Land a `./run.sh browser`-reachable demo that boots `node.wasm` in `BrowserKernel` and exercises the full Node-compat surface from a web page, including `https.get`. The kernel + wasm sysroot is already browser-portable (the kernel runs in a Web Worker on every host, and Slice 4b moved the trust store from host fs into a synthetic kernel file). The remaining gap is the host-delegated TCP transport — `NodePlatformIO` proxies sockets to Node's `net.Socket`, but `BrowserKernel` has no equivalent.
+
+**Estimate:** 1.5 weeks. Two distinct sub-tasks; the bridge is the load-bearing one.
+
+**Branch:** `explore-node-wasm-feat-browser-demo`, stacked on `explore-node-wasm-feat-npm-real` (Phase 6).
+
+### Task 7.1 — Smoke: boot node.wasm in `BrowserKernel`
+
+**Files:**
+- Modify: `host/src/browser-host.ts` (or wherever `BrowserKernel` lives) — surface the same `_nodeNative` shape that `NodePlatformIO` exposes, with the `socketConnect` / `tlsConnect` family stubbed to reject so any non-network code path works.
+- Create: `examples/node-browser/` — minimal HTML+JS demo page that boots `node.wasm`, accepts a JS snippet from a textarea, and pipes stdout/stderr to a console area.
+- Modify: `run.sh` (or the demo registry) — add `node-browser` so `./run.sh browser` lists it.
+
+**Acceptance:**
+- `node.wasm` evaluates JS, `require('fs')` reads/writes synthetic + OPFS-backed paths, `require('crypto')` produces the same SHA-256 as the Node host, `require('zlib')` round-trips a payload, `require('os').platform()` returns the wasm-side value (not the browser's).
+- A snippet that calls `https.get(...)` fails with a clear "no TCP transport on browser host" error — *not* a hang.
+
+This is a deliberate "everything except sockets" milestone — most of the value (REPL, fs, crypto, zlib, util, stream) ships here without needing the bridge.
+
+### Task 7.2 — WebSocket TCP-bridge for `net` and `tls`
+
+**Files:**
+- Create: `examples/node-browser/tcp-bridge.ts` (Node side) — a tiny WebSocket server that accepts `{ host, port }` framing and brokers a TCP socket per connection. ~80 LOC. Runs alongside the existing `./run.sh browser` dev server.
+- Modify: `host/src/browser-host.ts` — implement `socketConnect` / `socketRead` / `socketWrite` / `socketClose` against a `WebSocket` to the bridge URL (configurable; default `ws://localhost:5198/_tcp`). The wire framing on the WS connection is `[u32 length][bytes]`. TLS is unchanged: `tlsConnect` still runs libssl in-wasm and gets bytes via the same socket bindings, so the bridge sees only opaque ciphertext.
+- Modify: `examples/node-browser/index.html` — add a "Try `https.get`" snippet that hits a real URL through the bridge.
+
+**Why a Node-side bridge and not direct browser→TCP**: browsers can't open arbitrary TCP sockets. `WebTransport` is browser-only and not yet broadly shipped; a WebSocket bridge is the smallest portable thing that works in every modern browser today and degrades to a clear error if the bridge isn't running.
+
+**Security note for the demo body:** the bridge is for the local dev demo only. A production deployment of this technique needs an allow-list, rate-limiting, and an authenticated path — `docs/browser-support.md` should call this out.
+
+### Task 7.3 — Tests
+
+**Files:**
+- Create: `host/test/quickjs-node-browser.test.ts` — Playwright-driven, mirrors the existing browser tests (`scripts/run-browser-libc-tests.sh` shape). Cases:
+  1. Boot smoke: `node -e "console.log(1+1)"` in browser → `2`.
+  2. fs + crypto: write a Buffer, read it back, hash it, compare with the Node host's hash for the same input.
+  3. zlib gzip round-trip in the browser.
+  4. `https.get` through the bridge against a self-signed local TLS server (same fixture pattern as `quickjs-node-https.test.ts`). Skips if the bridge isn't running, the same way `pickWasmDialHost` skips today.
+
+### Task 7.4 — Documentation
+
+- `docs/browser-support.md` — new "Node compat in the browser" section. Document the bridge, its security limits, and which `_nodeNative` calls work / don't.
+- `docs/architecture.md` — add a short section on the WebSocket TCP-bridge and how it slots into the kernel-host split.
+- `README.md` — add the new demo to the demo list.
+- `docs/porting-guide.md` — note the `socketConnect`/`tlsConnect` ABI is shared between Node and browser hosts so future native modules don't have to special-case.
+
+### Task 7.5 — Verification gauntlet & commit
+
+Standard gauntlet (`cargo test`, `npm exec vitest -- run`, libc-test, posix-test, ABI check). Plus the new browser tests via `./run.sh browser` and the Playwright suite.
+
+**ABI:** none. Browser host is a JS-side change; the native module + bootstrap.js stays untouched. No `ABI_VERSION` bump.
+
+---
+
+## Phase 8+ — Decision point
 
 **Goal:** Decide whether QuickJS-NG is fit-for-purpose for the long term, or whether the SpiderMonkey-jitless escape hatch becomes necessary.
 
@@ -1917,10 +1975,10 @@ bootstrap.js is mostly Node-API shim and is engine-agnostic at the JS level, exc
 
 ### Tasks (only if we switch)
 
-- Task 7.1: SpiderMonkey jitless build script (`examples/libs/spidermonkey/`)
-- Task 7.2: Port `node-main.c` to SpiderMonkey JSAPI
-- Task 7.3: Re-bind the four native namespaces in JSAPI
-- Task 7.4: Re-run all phase tests on the new binary
+- Task 8.1: SpiderMonkey jitless build script (`examples/libs/spidermonkey/`)
+- Task 8.2: Port `node-main.c` to SpiderMonkey JSAPI
+- Task 8.3: Re-bind the four native namespaces in JSAPI
+- Task 8.4: Re-run all phase tests on the new binary
 
 This is its own multi-week track and gets its own design + plan PR pair.
 
